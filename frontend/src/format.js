@@ -10,10 +10,26 @@ export function formatBytes(bytes) {
   return i === 0 ? `${value} B` : `${value.toFixed(2)} ${units[i]}`
 }
 
+const MONTHS = [
+  'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+]
+const pad2 = (n) => String(n).padStart(2, '0')
+
+/** «3 de noviembre del 2026, 01:50» en la zona horaria del navegador. */
 export function formatDate(iso) {
   if (!iso) return '—'
   const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString()
+  if (Number.isNaN(d.getTime())) return '—'
+  return `${d.getDate()} de ${MONTHS[d.getMonth()]} del ${d.getFullYear()}, ${formatTime(d)}`
+}
+
+/** «01:50:07», formato de 24 horas. */
+export function formatTime(value, seconds = false) {
+  const d = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  const base = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+  return seconds ? `${base}:${pad2(d.getSeconds())}` : base
 }
 
 export function formatDuration(startIso, endIso) {

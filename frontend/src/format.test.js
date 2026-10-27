@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { describeParams, formatBytes, formatDuration, isActive, statusLabel } from './format.js'
+import { describeParams, formatBytes, formatDate, formatDuration, formatTime, isActive, statusLabel } from './format.js'
 
 describe('format', () => {
   it('formatBytes', () => {
@@ -13,6 +13,14 @@ describe('format', () => {
     expect(formatDuration('2026-01-01T00:00:00Z', '2026-01-01T00:46:04Z')).toBe('46:04')
     expect(formatDuration('2026-01-01T00:00:00Z', '2026-01-01T02:15:39Z')).toBe('2:15:39')
     expect(formatDuration(null)).toBe('')
+  })
+
+  it('formatDate en español', () => {
+    // Fecha local (sin zona) para que la prueba no dependa del huso horario.
+    expect(formatDate('2026-11-03T01:50:49')).toBe('3 de noviembre del 2026, 01:50')
+    expect(formatDate('2026-10-11T13:05:00')).toBe('11 de octubre del 2026, 13:05')
+    expect(formatDate(null)).toBe('—')
+    expect(formatTime('2026-10-11T09:04:07', true)).toBe('09:04:07')
   })
 
   it('status helpers', () => {

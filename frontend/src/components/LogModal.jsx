@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api.js'
 import Modal from './Modal.jsx'
+import { formatTime } from '../format.js'
 
 export default function LogModal({ job, liveEvents, onClose }) {
   const [initial, setInitial] = useState(null)
@@ -28,7 +29,7 @@ export default function LogModal({ job, liveEvents, onClose }) {
         {initial === null && !error ? 'Cargando…' : null}
         {lines.map((l, i) => (
           <div key={i}>
-            <span className="muted">{new Date(l.ts).toLocaleTimeString()} </span>
+            <span className="muted">{formatTime(l.ts, true)} </span>
             {l.line}
           </div>
         ))}
