@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import uuid
 import zipfile
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
@@ -123,27 +124,29 @@ async def create_job(
     if rejected:
         raise HTTPException(400, f"Archivos no compatibles con la operación: {', '.join(rejected[:5])}")
 
-    job = Job(owner_id=user.id, operation=operation, params=clean_params, target_node_id=target.id if target else None)
-    job.title = names[0] if len(names) == 1 else f"{names[0]} y {len(names) - 1} más"
-    db.add(job)
-    db.flush()
-
+    # Los archivos se guardan ANTES de tocar la base de datos: una subida grande no debe
+    # mantener abierta una escritura de SQLite (bloquearía al resto del servidor).
+    job_id = uuid.uuid4().hex
+    stored_files: list[JobFile] = []
     remaining = settings.max_upload_mb * 1024 * 1024
     try:
         for upload, name in zip(files, names):
             stored = new_stored_name(name)
-            size = await save_upload(upload, file_path(settings, job.id, "input", stored), remaining)
+            size = await save_upload(upload, file_path(settings, job_id, "input", stored), remaining)
             remaining -= size
-            job.files.append(JobFile(kind="input", filename=name, stored_name=stored, size=size))
+            stored_files.append(JobFile(kind="input", filename=name, stored_name=stored, size=size))
     except UploadTooLarge as exc:
-        db.rollback()
-        remove_job_dir(settings, job.id)
+        remove_job_dir(settings, job_id)
         raise HTTPException(413, f"El trabajo supera el límite de {settings.max_upload_mb} MB") from exc
     except BaseException:
-        db.rollback()
-        remove_job_dir(settings, job.id)
+        remove_job_dir(settings, job_id)
         raise
 
+    job = Job(id=job_id, owner_id=user.id, operation=operation, params=clean_params,
+              target_node_id=target.id if target else None)
+    job.title = names[0] if len(names) == 1 else f"{names[0]} y {len(names) - 1} más"
+    job.files.extend(stored_files)
+    db.add(job)
     job.message = "En cola"
     db.add(JobLog(job_id=job.id, line=f"Trabajo creado por {user.username}: {operation} con {len(names)} archivo(s)"))
     db.commit()

@@ -423,3 +423,29 @@ def test_dispatch_prefers_gpu_for_video(admin, app):
     hub.nodes.clear()
     assert Job
     assert asyncio
+
+
+def test_upload_does_not_hold_database_lock(admin, app, monkeypatch):
+    """Mientras se recibe una subida, otras escrituras en la base deben poder ocurrir."""
+    import sqlite3
+
+    from app.routers import jobs as jobs_router
+
+    db_path = app.state.settings.database_url.removeprefix("sqlite:///")
+    real_save = jobs_router.save_upload
+    seen = []
+
+    async def save_and_write(upload, dest, limit):
+        conn = sqlite3.connect(db_path, timeout=0.5)
+        try:
+            conn.execute("UPDATE nodes SET jobs_done = jobs_done WHERE id = 1")
+            conn.commit()
+            seen.append("ok")
+        finally:
+            conn.close()
+        return await real_save(upload, dest, limit)
+
+    monkeypatch.setattr(jobs_router, "save_upload", save_and_write)
+    r = admin.post("/api/jobs", data={"operation": "image.convert"}, files={"files": ("a.png", png_bytes(), "image/png")})
+    assert r.status_code == 201, r.text
+    assert seen == ["ok"]

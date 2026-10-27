@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from ..catalog import OPERATIONS, scrub
@@ -210,8 +211,13 @@ async def node_socket(ws: WebSocket):
             if not isinstance(msg, dict):
                 continue
             db.expire_all()  # ver cambios hechos por otras peticiones (cancelaciones, pausas)
-            node.last_seen = utcnow()
-            await _handle_node_message(hub, db, conn, node, msg)
+            try:
+                node.last_seen = utcnow()
+                await _handle_node_message(hub, db, conn, node, msg)
+            except SQLAlchemyError:
+                # Un mensaje que no se pudo guardar (p. ej. base ocupada) no debe cortar la conexión del nodo.
+                db.rollback()
+                log.exception("No se pudo procesar un mensaje del nodo %s", conn.node_id)
     except WebSocketDisconnect:
         pass
     finally:
