@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Instala e inicia Snack-Drop con un solo comando.
 #   ./setup.sh                      instalación interactiva
-#   ./setup.sh --port 9000          puerto HTTP distinto (por defecto 8080)
+#   ./setup.sh --port 9000          puerto HTTP distinto (por defecto 28743)
 #   ./setup.sh --deepseek-key sk-…  activa el asistente DeepSeek
 #   ./setup.sh --yes                sin preguntas (usa valores por defecto)
 #   ./setup.sh --down               detiene los contenedores
@@ -75,7 +75,7 @@ bold "Snack-Drop · instalación"
 FIRST_RUN=0
 if [[ ! -f .env ]]; then
   FIRST_RUN=1
-  PORT="${PORT:-$(ask "Puerto HTTP" "8080")}"
+  PORT="${PORT:-$(ask "Puerto HTTP" "28743")}"
   if [[ -z "$DEEPSEEK_KEY" && $ASSUME_YES -eq 0 && -t 0 ]]; then
     read -r -s -p "API key de DeepSeek (opcional, Enter para omitir): " DEEPSEEK_KEY || true
     echo
@@ -106,7 +106,7 @@ else
   [[ -n "$PORT" ]] && env_set SNACKDROP_HTTP_PORT "$PORT"
   [[ -n "$DEEPSEEK_KEY" ]] && env_set DEEPSEEK_API_KEY "$DEEPSEEK_KEY"
   PORT="$(env_get SNACKDROP_HTTP_PORT)"
-  PORT="${PORT:-8080}"
+  PORT="${PORT:-28743}"
 fi
 
 info "Construyendo e iniciando contenedores (la primera vez tarda unos minutos)…"

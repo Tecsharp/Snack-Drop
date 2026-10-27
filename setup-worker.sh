@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Conecta esta computadora a un servidor Snack-Drop como nodo ejecutor.
-#   ./setup-worker.sh --server http://192.168.1.10:8080 --token sdn_xxx
+#   ./setup-worker.sh --server http://192.168.1.10:28743 --token sdn_xxx
 #   ./setup-worker.sh --allow image.convert     limita las operaciones aceptadas
 #   ./setup-worker.sh --down                    desconecta y detiene el nodo
 set -euo pipefail
@@ -34,7 +34,7 @@ if [[ "$ACTION" == "down" ]]; then
   exit 0
 fi
 
-if [[ -z "$SERVER" ]]; then read -r -p "URL del servidor Snack-Drop (p. ej. http://192.168.1.10:8080): " SERVER; fi
+if [[ -z "$SERVER" ]]; then read -r -p "URL del servidor Snack-Drop (p. ej. http://192.168.1.10:28743): " SERVER; fi
 if [[ -z "$TOKEN" ]]; then read -r -s -p "Token del nodo: " TOKEN; echo; fi
 [[ "$SERVER" =~ ^https?:// ]] || fail "La URL debe empezar con http:// o https://"
 [[ "$TOKEN" == sdn_* ]] || fail "El token debe empezar con sdn_"

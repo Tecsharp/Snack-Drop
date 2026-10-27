@@ -14,7 +14,7 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "${SNACKDROP_HTTP_PORT:-8080}:8080"
+      - "${SNACKDROP_HTTP_PORT:-28743}:8080"
     depends_on:
       backend:
         condition: service_healthy

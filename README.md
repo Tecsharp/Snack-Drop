@@ -20,7 +20,7 @@ El script:
 2. Construye e inicia los contenedores (`backend`, `frontend`, `worker`).
 3. Espera a que el servidor responda y muestra la URL y las credenciales.
 
-Abre `http://localhost:8080`, entra como `admin` con la contraseña mostrada y cámbiala en **Cuenta**.
+Abre `http://localhost:28743`, entra como `admin` con la contraseña mostrada y cámbiala en **Cuenta**.
 
 Opciones: `./setup.sh --port 9000`, `./setup.sh --deepseek-key sk-…`, `./setup.sh --yes` (sin preguntas), `./setup.sh --down`.
 
@@ -30,7 +30,7 @@ Opciones: `./setup.sh --port 9000`, `./setup.sh --deepseek-key sk-…`, `./setup
 2. En la otra computadora, clona este repositorio y ejecuta el comando mostrado:
 
    ```bash
-   ./setup-worker.sh --server http://IP-DEL-SERVIDOR:8080 --token sdn_xxx
+   ./setup-worker.sh --server http://IP-DEL-SERVIDOR:28743 --token sdn_xxx
    ```
 
    Sin Docker (Windows/macOS/Linux con Python 3.11+):
@@ -38,8 +38,11 @@ Opciones: `./setup.sh --port 9000`, `./setup.sh --deepseek-key sk-…`, `./setup
    ```bash
    cd worker
    pip install -r requirements.txt
-   SNACKDROP_SERVER=http://IP-DEL-SERVIDOR:8080 SNACKDROP_TOKEN=sdn_xxx python -m snackdrop_worker
+   SNACKDROP_SERVER=http://IP-DEL-SERVIDOR:28743 SNACKDROP_TOKEN=sdn_xxx python -m snackdrop_worker
    ```
+
+Si la otra computadora no conecta, revisa que el firewall del servidor permita entrada TCP al puerto `28743`
+(o el que elegiste con `--port`) y que ambas estén en la misma red (o usa una VPN como Tailscale).
 
 El agente solo abre una conexión **saliente** (WebSocket + HTTP) hacia el servidor. No expone puertos ni el escritorio,
 y solo ejecuta operaciones del catálogo. Su dueño puede limitarlas aún más con `--allow image.convert`.
