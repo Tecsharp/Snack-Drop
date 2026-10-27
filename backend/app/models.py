@@ -104,6 +104,7 @@ class Job(Base):
 
     owner: Mapped[User] = relationship()
     files: Mapped[list["JobFile"]] = relationship(cascade="all, delete-orphan", order_by="JobFile.id")
+    failures: Mapped[list["JobFailure"]] = relationship(cascade="all, delete-orphan", order_by="JobFailure.id")
 
 
 class JobFile(Base):
@@ -124,3 +125,14 @@ class JobLog(Base):
     job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     line: Mapped[str] = mapped_column(Text)
+
+
+class JobFailure(Base):
+    """Archivo de entrada que el nodo no pudo procesar (el resto del lote sí se entrega)."""
+
+    __tablename__ = "job_failures"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    error: Mapped[str] = mapped_column(Text)

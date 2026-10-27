@@ -209,6 +209,7 @@ class Agent:
         in_dir.mkdir(parents=True, exist_ok=True)
         out_dir.mkdir(parents=True, exist_ok=True)
         base = f"{self.config.server}/api/worker/jobs/{job_id}"
+        failures: list[dict] = []
         async with httpx.AsyncClient(headers=headers, timeout=httpx.Timeout(60, read=300), verify=self.config.verify_tls) as client:
             try:
                 if operation not in self.config.allowed_operations:
@@ -231,7 +232,7 @@ class Agent:
                     await self.progress(job_id, "downloading", 20 * min(1, done_bytes / total_bytes), f"Descargando {i + 1}/{total}")
 
                 outputs: list[Path] = []
-                errors: list[str] = []
+                errors: list[dict] = []
                 for i, (src, name) in enumerate(local):
                     self._check_cancel()
                     await self.progress(job_id, "processing", 20 + 70 * i / total, f"Procesando {i + 1}/{total}: {name}")
@@ -239,13 +240,16 @@ class Agent:
                         out, info = await asyncio.to_thread(process, operation, params, src, out_dir, name)
                     except ProcessingError as exc:
                         # Un archivo dañado no debe tumbar el lote completo.
-                        errors.append(str(exc))
+                        errors.append({"filename": name, "error": str(exc)[:2000]})
                         await self.log_line(job_id, f"OMITIDO: {exc}")
                         continue
                     outputs.append(out)
                     await self.log_line(job_id, info)
                 if not outputs:
-                    raise ProcessingError(errors[0] if len(errors) == 1 else f"Ningún archivo se pudo procesar ({len(errors)} errores)")
+                    failures = errors
+                    raise ProcessingError(
+                        errors[0]["error"] if len(errors) == 1 else f"Ningún archivo se pudo procesar ({len(errors)} errores)"
+                    )
                 await self.progress(job_id, "processing", 90, "Procesamiento terminado")
 
                 for i, out in enumerate(outputs):
@@ -262,14 +266,14 @@ class Agent:
                     summary += f" · {len(errors)} omitido(s)"
                 if before:
                     summary += f" · {after * 100 / before:.0f}% del tamaño original"
-                await client.post(f"{base}/complete", json={"ok": True, "summary": summary})
+                await client.post(f"{base}/complete", json={"ok": True, "summary": summary, "failures": errors})
             except (JobCancelled, asyncio.CancelledError):
                 await self.log_line(job_id, "Trabajo cancelado")
                 await _safe_post(client, f"{base}/complete", {"ok": False, "error": "Cancelado"})
             except Exception as exc:  # noqa: BLE001 - se reporta al servidor
                 message = str(exc) if isinstance(exc, ProcessingError) else f"{type(exc).__name__}: {exc}"
                 log.exception("Trabajo %s falló", job_id)
-                await _safe_post(client, f"{base}/complete", {"ok": False, "error": message[:4000]})
+                await _safe_post(client, f"{base}/complete", {"ok": False, "error": message[:4000], "failures": failures})
             finally:
                 shutil.rmtree(work, ignore_errors=True)
                 self._current_id = None

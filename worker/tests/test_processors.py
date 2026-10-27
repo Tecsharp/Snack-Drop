@@ -135,3 +135,12 @@ def test_never_larger_can_be_disabled(tmp_path):
         "image.convert", {"format": "webp", "quality": 100, "never_larger": False}, src, tmp_path / "out", "foto.jpg"
     )
     assert out.stat().st_size > src.stat().st_size
+
+
+def test_error_message_is_friendly(tmp_path):
+    src = tmp_path / "x"
+    src.write_bytes(b"basura")
+    with pytest.raises(ProcessingError) as err:
+        process("image.convert", {}, src, tmp_path / "out", "rota.png")
+    assert str(err.value) == "rota.png: no es una imagen válida o está dañada"
+    assert str(tmp_path) not in str(err.value)

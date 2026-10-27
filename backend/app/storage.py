@@ -72,3 +72,7 @@ def remove_job_dir(settings: Settings, job_id: str) -> None:
 
 def remove_outputs_dir(settings: Settings, job_id: str) -> None:
     shutil.rmtree(job_dir(settings, job_id) / "out", ignore_errors=True)
+
+
+def remove_inputs_dir(settings: Settings, job_id: str) -> None:
+    shutil.rmtree(job_dir(settings, job_id) / "in", ignore_errors=True)

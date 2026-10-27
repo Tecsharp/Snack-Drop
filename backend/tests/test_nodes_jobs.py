@@ -227,6 +227,12 @@ def test_end_to_end_webp_batch(live_server, tmp_path):
             assert "1 omitido" in job["message"]
             logs = http.get(f"/api/jobs/{job['id']}/logs").json()
             assert any("OMITIDO" in l["line"] and "rota.png" in l["line"] for l in logs)
+            assert [f["filename"] for f in job["failures"]] == ["rota.png"]
+            assert "rota.png" in job["failures"][0]["error"]
+            assert job["inputs_deleted"] is True and job["expires_at"]
+            app_settings = _app.state.settings
+            assert not (app_settings.jobs_dir / job["id"] / "in").exists()
+            assert (app_settings.jobs_dir / job["id"] / "out").exists()
 
             nodes = http.get("/api/nodes").json()
             assert nodes[0]["jobs_done"] == 3 and nodes[0]["jobs_failed"] == 1
@@ -261,3 +267,44 @@ def test_paused_node_does_not_take_jobs(live_server, tmp_path):
 
 def test_login_helper_used():
     assert callable(login)
+
+
+def test_cancel_queued_deletes_inputs_and_purge(admin, app):
+    import asyncio
+    from datetime import timedelta
+
+    from app.main import purge_expired
+    from app.models import Job, utcnow
+
+    settings = app.state.settings
+    files = {"files": ("x.png", png_bytes(), "image/png")}
+    job = admin.post("/api/jobs", data={"operation": "image.convert"}, files=files).json()
+    jdir = settings.jobs_dir / job["id"]
+    assert (jdir / "in").exists()
+    admin.post(f"/api/jobs/{job['id']}/cancel")
+    assert not (jdir / "in").exists()
+
+    recent = admin.post("/api/jobs", data={"operation": "image.convert"}, files=files).json()
+    admin.post(f"/api/jobs/{recent['id']}/cancel")
+
+    db = app.state.SessionLocal()
+    db.get(Job, job["id"]).finished_at = utcnow() - timedelta(days=settings.retention_days + 1)
+    db.commit()
+    db.close()
+    jdir.mkdir(parents=True, exist_ok=True)
+
+    assert asyncio.run(purge_expired(app)) == 1
+    assert admin.get(f"/api/jobs/{job['id']}").status_code == 404
+    assert not jdir.exists()
+    assert admin.get(f"/api/jobs/{recent['id']}").status_code == 200
+
+
+def test_retention_zero_keeps_everything(tmp_path):
+    import asyncio
+    from dataclasses import replace
+
+    from app.main import create_app, purge_expired
+    from conftest import make_settings
+
+    app = create_app(replace(make_settings(tmp_path), retention_days=0))
+    assert asyncio.run(purge_expired(app)) == 0

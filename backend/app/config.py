@@ -37,6 +37,8 @@ class Settings:
     cookie_secure: bool
     max_upload_mb: int
     max_files_per_job: int
+    retention_days: int = 7
+    delete_inputs_on_finish: bool = True
 
     @property
     def jobs_dir(self) -> Path:
@@ -66,4 +68,6 @@ def get_settings() -> Settings:
         cookie_secure=_bool(os.getenv("SNACKDROP_COOKIE_SECURE"), False),
         max_upload_mb=_int(os.getenv("SNACKDROP_MAX_UPLOAD_MB"), 2048),
         max_files_per_job=_int(os.getenv("SNACKDROP_MAX_FILES_PER_JOB"), 500),
+        retention_days=max(0, _int(os.getenv("SNACKDROP_RETENTION_DAYS"), 7)),
+        delete_inputs_on_finish=_bool(os.getenv("SNACKDROP_DELETE_INPUTS_ON_FINISH"), True),
     )

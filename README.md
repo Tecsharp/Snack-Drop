@@ -66,6 +66,17 @@ pausar, revocar o eliminar el nodo en cualquier momento. Un administrador puede 
 - **Cola y despacho**: modo automático (primer nodo libre compatible) o nodo específico; pausa por nodo o global;
   si un nodo se desconecta, su trabajo vuelve a la cola.
 
+## Archivos y limpieza
+
+- **Nodo ejecutor:** cada trabajo usa una carpeta temporal que se borra al terminar (éxito, fallo o cancelación).
+- **Originales en el servidor:** se borran en cuanto el trabajo termina (`SNACKDROP_DELETE_INPUTS_ON_FINISH=true`).
+- **Resultados:** se pueden descargar durante `SNACKDROP_RETENTION_DAYS` días (7 por defecto; `0` = para siempre).
+  Después, el trabajo y sus archivos se eliminan automáticamente (revisión cada hora). También puedes borrarlos antes
+  con el icono de basura.
+- **Archivos que fallan:** el lote continúa; la tarjeta del trabajo lista cada archivo omitido con su motivo.
+
+Cambia estos valores en `.env` y aplica con `./setup.sh`.
+
 ## Seguridad
 
 - Sin registro público: el administrador crea las cuentas con contraseña temporal y el usuario debe cambiarla al entrar.

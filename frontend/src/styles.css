@@ -210,3 +210,6 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 3s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } .progress-fill { transition: none; } }
+
+.failures summary { cursor: pointer; }
+.failures ul { margin: 6px 0 0; padding-left: 18px; max-height: 180px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }

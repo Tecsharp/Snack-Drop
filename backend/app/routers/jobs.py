@@ -16,7 +16,15 @@ from .. import assistant
 from ..catalog import CatalogError, accepts_file, public_catalog, validate_job
 from ..deps import can_use_node, get_current_user, get_db
 from ..models import ACTIVE_STATUSES, TERMINAL_STATUSES, Job, JobFile, JobLog, Node, User, iso, utcnow
-from ..storage import UploadTooLarge, file_path, new_stored_name, remove_job_dir, safe_filename, save_upload
+from ..storage import (
+    UploadTooLarge,
+    file_path,
+    new_stored_name,
+    remove_inputs_dir,
+    remove_job_dir,
+    safe_filename,
+    save_upload,
+)
 
 router = APIRouter(prefix="/api", tags=["jobs"])
 
@@ -175,6 +183,9 @@ async def cancel_job(
         if conn is not None and conn.job_id == job.id:
             # El nodo queda ocupado hasta que confirme la cancelación (POST /complete).
             await conn.send({"type": "job.cancel", "job_id": job.id})
+    elif request.app.state.settings.delete_inputs_on_finish:
+        # Si estaba en curso, se borran cuando el nodo confirma la cancelación.
+        remove_inputs_dir(request.app.state.settings, job.id)
     await hub.notify_job(db, job)
     return hub.job_out(db, job)
 

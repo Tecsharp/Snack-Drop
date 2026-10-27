@@ -11,7 +11,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 Image.MAX_IMAGE_PIXELS = 200_000_000
 
@@ -129,9 +129,16 @@ def convert_image(src: Path, out_dir: Path, original_name: str, params: dict) ->
             out.write_bytes(data)
     except ProcessingError:
         raise
+    except UnidentifiedImageError as exc:
+        out.unlink(missing_ok=True)
+        raise ProcessingError(f"{original_name}: no es una imagen válida o está dañada") from exc
+    except Image.DecompressionBombError as exc:
+        out.unlink(missing_ok=True)
+        raise ProcessingError(f"{original_name}: la imagen es demasiado grande para procesarla") from exc
     except Exception as exc:  # noqa: BLE001 - Pillow lanza OSError, ValueError, RuntimeError…
         out.unlink(missing_ok=True)
-        raise ProcessingError(f"No se pudo procesar la imagen {original_name}: {exc}") from exc
+        reason = str(exc).replace(str(src), original_name) or type(exc).__name__
+        raise ProcessingError(f"{original_name}: {reason}") from exc
 
     after = out.stat().st_size
     dims = f"{orig_size[0]}x{orig_size[1]}" + (f" → {new_size[0]}x{new_size[1]}" if new_size != orig_size else "")

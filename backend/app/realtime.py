@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import timedelta
 from dataclasses import dataclass, field
 
 from fastapi import WebSocket
@@ -13,7 +14,7 @@ from sqlalchemy.orm import Session
 from .config import Settings
 from .deps import can_manage_node, can_use_node
 from .storage import remove_outputs_dir
-from .models import ACTIVE_STATUSES, Job, Node, User, iso, utcnow
+from .models import ACTIVE_STATUSES, TERMINAL_STATUSES, Job, Node, User, iso, utcnow
 
 log = logging.getLogger("snackdrop.realtime")
 
@@ -96,8 +97,7 @@ class Hub:
             data["grants"] = [{"user_id": g.user_id, "username": g.user.username} for g in node.grants]
         return data
 
-    @staticmethod
-    def job_out(db: Session, job: Job) -> dict:
+    def job_out(self, db: Session, job: Job) -> dict:
         names: dict[int, str] = {}
         for nid in {job.assigned_node_id, job.target_node_id} - {None}:
             n = db.get(Node, nid)
@@ -125,6 +125,11 @@ class Hub:
             "finished_at": iso(job.finished_at),
             "inputs": [{"id": f.id, "filename": f.filename, "size": f.size} for f in inputs],
             "outputs": [{"id": f.id, "filename": f.filename, "size": f.size} for f in outputs],
+            "failures": [{"filename": f.filename, "error": f.error} for f in job.failures],
+            "inputs_deleted": job.status in TERMINAL_STATUSES and self.settings.delete_inputs_on_finish,
+            "expires_at": iso(job.finished_at + timedelta(days=self.settings.retention_days))
+            if job.finished_at and self.settings.retention_days
+            else None,
             "input_size": sum(f.size for f in inputs),
             "output_size": sum(f.size for f in outputs),
         }
@@ -236,5 +241,6 @@ class Hub:
             job.started_at = None
             for f in [f for f in job.files if f.kind == "output"]:
                 job.files.remove(f)
+            job.failures.clear()
             db.commit()
             remove_outputs_dir(self.settings, job.id)

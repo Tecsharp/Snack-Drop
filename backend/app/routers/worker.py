@@ -13,9 +13,9 @@ from sqlalchemy.orm import Session
 
 from ..catalog import OPERATIONS
 from ..deps import get_db, get_node_from_bearer, node_from_token
-from ..models import ACTIVE_STATUSES, Job, JobFile, JobLog, Node, iso, utcnow
+from ..models import ACTIVE_STATUSES, TERMINAL_STATUSES, Job, JobFailure, JobFile, JobLog, Node, iso, utcnow
 from ..realtime import NodeConn
-from ..storage import UploadTooLarge, file_path, new_stored_name, safe_filename, save_upload
+from ..storage import UploadTooLarge, file_path, new_stored_name, remove_inputs_dir, safe_filename, save_upload
 
 log = logging.getLogger("snackdrop.worker")
 router = APIRouter(tags=["worker"])
@@ -24,10 +24,16 @@ MAX_LOG_LINES = 5000
 PROGRESS_STATUSES = {"downloading", "processing", "uploading"}
 
 
+class FailureIn(BaseModel):
+    filename: str = Field(max_length=255)
+    error: str = Field(max_length=2000)
+
+
 class CompleteIn(BaseModel):
     ok: bool
     error: str | None = Field(None, max_length=4000)
     summary: str | None = Field(None, max_length=255)
+    failures: list[FailureIn] = Field(default_factory=list, max_length=5000)
 
 
 def _active_job_for_node(db: Session, node: Node, job_id: str) -> Job:
@@ -99,9 +105,13 @@ async def complete_job(
             job.error = body.error or "Error desconocido"
             job.message = "Falló"
             node.jobs_failed += 1
+        for f in body.failures:
+            job.failures.append(JobFailure(filename=safe_filename(f.filename), error=f.error))
         db.add(JobLog(job_id=job.id, line=f"[{node.name}] {job.message if body.ok else 'ERROR: ' + job.error}"))
         db.commit()
         await hub.notify_job(db, job)
+    if job.status in TERMINAL_STATUSES and request.app.state.settings.delete_inputs_on_finish:
+        remove_inputs_dir(request.app.state.settings, job.id)
     await hub.notify_node(db, node)
     await hub.dispatch()
     return {"status": job.status}

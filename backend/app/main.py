@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+from datetime import timedelta
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -9,9 +11,10 @@ from sqlalchemy import select
 
 from .config import Settings, get_settings
 from .db import Base, make_engine, make_sessionmaker
-from .models import ACTIVE_STATUSES, Job, Node, User
+from .models import ACTIVE_STATUSES, TERMINAL_STATUSES, Job, Node, User, utcnow
 from .realtime import Hub
 from .routers import auth, jobs, nodes, ui_ws, users, worker
+from .storage import remove_job_dir
 from .security import LoginLimiter, generate_password, hash_node_token, hash_password
 
 log = logging.getLogger("snackdrop")
@@ -62,6 +65,45 @@ def bootstrap(settings: Settings, SessionLocal) -> None:
         db.close()
 
 
+PURGE_INTERVAL_SECONDS = 3600
+
+
+async def purge_expired(app: FastAPI) -> int:
+    """Elimina trabajos terminados (y sus archivos) más antiguos que la retención configurada."""
+    settings: Settings = app.state.settings
+    if settings.retention_days <= 0:
+        return 0
+    cutoff = utcnow() - timedelta(days=settings.retention_days)
+    hub = app.state.hub
+    db = app.state.SessionLocal()
+    removed = 0
+    try:
+        old = db.scalars(
+            select(Job).where(Job.status.in_(TERMINAL_STATUSES), Job.finished_at.is_not(None), Job.finished_at < cutoff)
+        ).all()
+        for job in old:
+            await hub.notify_job_removed(db, job)
+            job_id = job.id
+            db.delete(job)
+            db.commit()
+            remove_job_dir(settings, job_id)
+            removed += 1
+    finally:
+        db.close()
+    if removed:
+        log.info("Limpieza: %d trabajo(s) con más de %d días eliminados", removed, settings.retention_days)
+    return removed
+
+
+async def _purge_loop(app: FastAPI) -> None:
+    while True:
+        try:
+            await purge_expired(app)
+        except Exception:  # noqa: BLE001 - la limpieza nunca debe tumbar el servidor
+            log.exception("Error en la limpieza periódica")
+        await asyncio.sleep(PURGE_INTERVAL_SECONDS)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -73,7 +115,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         bootstrap(settings, SessionLocal)
+        purger = asyncio.create_task(_purge_loop(app))
         yield
+        purger.cancel()
+        with suppress(asyncio.CancelledError):
+            await purger
         engine.dispose()
 
     app = FastAPI(title="Snack-Drop", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)

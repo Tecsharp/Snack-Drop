@@ -74,6 +74,30 @@ export default function JobCard({ job, me, onLogs }) {
         <span className="muted truncate">{job.message}</span>
       </div>
       {job.error && <div className="alert error small">{job.error}</div>}
+      {job.failures?.length > 0 && (
+        <details className="failures">
+          <summary className="warn small">
+            {job.failures.length === 1
+              ? '1 archivo no se pudo procesar'
+              : `${job.failures.length} archivos no se pudieron procesar`}{' '}
+            — ver detalle
+          </summary>
+          <ul>
+            {job.failures.map((f, i) => (
+              <li key={i} className="small">
+                <b>{f.filename}</b>:{' '}
+                <span className="muted">{f.error.startsWith(`${f.filename}: `) ? f.error.slice(f.filename.length + 2) : f.error}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {!active && (job.expires_at || job.inputs_deleted) && (
+        <div className="muted small">
+          {job.inputs_deleted ? 'Originales borrados del servidor. ' : ''}
+          {job.expires_at ? `${job.outputs.length ? 'Resultados disponibles' : 'Se elimina'} hasta ${formatDate(job.expires_at)}.` : ''}
+        </div>
+      )}
       {error && <div className="alert error small">{error}</div>}
     </div>
   )

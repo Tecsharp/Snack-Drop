@@ -96,6 +96,10 @@ SNACKDROP_COOKIE_SECURE=false
 SNACKDROP_SESSION_TTL_MINUTES=720
 SNACKDROP_MAX_UPLOAD_MB=2048
 SNACKDROP_MAX_FILES_PER_JOB=500
+# Días que se conservan los trabajos terminados y sus resultados (0 = para siempre).
+SNACKDROP_RETENTION_DAYS=7
+# Borrar los archivos originales del servidor en cuanto termina cada trabajo.
+SNACKDROP_DELETE_INPUTS_ON_FINISH=true
 DEEPSEEK_API_KEY=${DEEPSEEK_KEY}
 DEEPSEEK_MODEL=deepseek-chat
 EOF
