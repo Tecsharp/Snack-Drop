@@ -11,6 +11,7 @@ from fastapi import WebSocket
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .catalog import OPERATIONS, redact
 from .config import Settings
 from .deps import can_manage_node, can_use_node
 from .storage import remove_outputs_dir
@@ -43,6 +44,8 @@ class NodeConn(Conn):
     node_id: int = 0
     capabilities: list[str] = field(default_factory=list)
     job_id: str | None = None
+    hw_encoders: list[str] = field(default_factory=list)
+    gpu: bool = False
 
 
 class Hub:
@@ -85,6 +88,8 @@ class Hub:
             "arch": node.arch,
             "accelerator": node.accelerator,
             "capabilities": list(conn.capabilities) if conn else list(node.capabilities or []),
+            "hw_encoders": list(conn.hw_encoders) if conn else [],
+            "gpu": bool(conn and conn.gpu),
             "jobs_done": node.jobs_done,
             "jobs_failed": node.jobs_failed,
             "last_seen": iso(node.last_seen),
@@ -109,7 +114,7 @@ class Hub:
             "id": job.id,
             "title": job.title,
             "operation": job.operation,
-            "params": job.params,
+            "params": redact(job.operation, job.params),
             "status": job.status,
             "progress": round(job.progress or 0.0, 1),
             "message": job.message,
@@ -181,20 +186,6 @@ class Hub:
 
     # --- Cola y despacho -----------------------------------------------------
 
-    def _find_job_for(self, db: Session, node: Node, conn: NodeConn) -> Job | None:
-        candidates = db.scalars(
-            select(Job).where(Job.status == "queued").order_by(Job.created_at).limit(500)
-        ).all()
-        for job in candidates:
-            if job.operation not in conn.capabilities:
-                continue
-            if job.target_node_id is not None and job.target_node_id != node.id:
-                continue
-            if not can_use_node(db, job.owner, node):
-                continue
-            return job
-        return None
-
     @staticmethod
     def worker_payload(job: Job) -> dict:
         return {
@@ -208,15 +199,32 @@ class Hub:
         async with self.dispatch_lock:
             db = self.SessionLocal()
             try:
+                idle: list[tuple[NodeConn, Node]] = []
                 for node_id, conn in list(self.nodes.items()):
                     if conn.job_id is not None:
                         continue
                     node = db.get(Node, node_id)
-                    if node is None or node.is_paused:
+                    if node is not None and not node.is_paused:
+                        idle.append((conn, node))
+                if not idle:
+                    return
+                queued = db.scalars(select(Job).where(Job.status == "queued").order_by(Job.created_at).limit(500)).all()
+                for job in queued:
+                    if not idle:
+                        break
+                    eligible = [
+                        (c, n) for c, n in idle
+                        if job.operation in c.capabilities
+                        and job.target_node_id in (None, n.id)
+                        and can_use_node(db, job.owner, n)
+                    ]
+                    if not eligible:
                         continue
-                    job = self._find_job_for(db, node, conn)
-                    if job is None:
-                        continue
+                    op = OPERATIONS.get(job.operation)
+                    # Video/IA prefieren nodos con GPU; el resto deja esos nodos libres si hay alternativa.
+                    eligible.sort(key=lambda cn: (not cn[0].gpu) if op and op.gpu else cn[0].gpu)
+                    conn, node = eligible[0]
+                    idle.remove((conn, node))
                     job.assigned_node_id = node.id
                     job.status = "assigned"
                     job.progress = 0.0

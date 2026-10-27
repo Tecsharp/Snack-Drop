@@ -29,6 +29,17 @@ describe('format', () => {
     expect(isActive({ status: 'done' })).toBe(false)
   })
 
+  it('describeParams genérico desde el catálogo', () => {
+    const op = {
+      title: 'Separar PDF',
+      defaults: { mode: 'each_page', ranges: '' },
+      schema: { properties: { mode: { title: 'Separar', enum: ['each_page', 'ranges'], labels: { ranges: 'Por rangos' } }, ranges: { title: 'Rangos' } } },
+    }
+    expect(describeParams('pdf.split', { mode: 'ranges', ranges: '1-3' }, op)).toBe('Separar PDF · Por rangos · rangos 1-3')
+    const protect = { title: 'Proteger', defaults: {}, schema: { properties: { password: { title: 'Contraseña', format: 'password' } } } }
+    expect(describeParams('pdf.protect', { password: '••••' }, protect)).toBe('Proteger')
+  })
+
   it('describeParams', () => {
     expect(describeParams('image.convert', { format: 'webp', quality: 70, max_width: 1920 })).toBe(
       'WEBP · calidad 70 · ≤1920px ancho',

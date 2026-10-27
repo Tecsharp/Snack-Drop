@@ -213,3 +213,8 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 
 .failures summary { cursor: pointer; }
 .failures ul { margin: 6px 0 0; padding-left: 18px; max-height: 180px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+.field-help { font-size: 0.75rem; color: var(--muted); opacity: 0.85; }
+.field-value { color: var(--text); }
+.op-desc { margin: -4px 0 0; }
+optgroup { color: var(--muted); }
+optgroup option { color: var(--text); }

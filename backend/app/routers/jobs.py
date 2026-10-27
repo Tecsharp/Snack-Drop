@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
 from .. import assistant
-from ..catalog import CatalogError, accepts_file, public_catalog, validate_job
+from ..catalog import OPERATIONS, CatalogError, accepts_file, public_catalog, scrub, validate_job
 from ..deps import can_use_node, get_current_user, get_db
 from ..models import ACTIVE_STATUSES, TERMINAL_STATUSES, Job, JobFile, JobLog, Node, User, iso, utcnow
 from ..storage import (
@@ -115,6 +115,9 @@ async def create_job(
         raise HTTPException(400, "Agrega al menos un archivo")
     if len(files) > settings.max_files_per_job:
         raise HTTPException(400, f"Máximo {settings.max_files_per_job} archivos por trabajo")
+    op = OPERATIONS[operation]
+    if len(files) < op.min_files:
+        raise HTTPException(400, f"«{op.title}» necesita al menos {op.min_files} archivos")
     names = [safe_filename(f.filename) for f in files]
     rejected = [n for n in names if not accepts_file(operation, n)]
     if rejected:
@@ -174,6 +177,7 @@ async def cancel_job(
     was_active = job.status in ACTIVE_STATUSES
     node_id = job.assigned_node_id
     job.status = "cancelled"
+    job.params = scrub(job.operation, job.params)
     job.message = f"Cancelado por {user.username}"
     job.finished_at = utcnow()
     db.add(JobLog(job_id=job.id, line=job.message))

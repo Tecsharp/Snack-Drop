@@ -1,0 +1,6 @@
+# Extras de IA: quitar fondo, ampliar resolución y transcripción. Solo CPU dentro de Docker.
+numpy>=1.26
+onnxruntime>=1.18
+rembg>=2.0.57
+faster-whisper>=1.0
+opencv-contrib-python-headless>=4.10

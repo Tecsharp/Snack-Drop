@@ -33,7 +33,7 @@ export default function Dashboard({ me, nodes, jobs, catalog, logEvents, onOpenN
         <div className="job-list">
           {active.length === 0 && <div className="empty">Nada en proceso. Arrastra archivos arriba para empezar.</div>}
           {active.map((j) => (
-            <JobCard key={j.id} job={j} me={me} onLogs={setLogJob} />
+            <JobCard key={j.id} job={j} me={me} onLogs={setLogJob} catalog={catalog} />
           ))}
         </div>
       </section>
@@ -46,7 +46,7 @@ export default function Dashboard({ me, nodes, jobs, catalog, logEvents, onOpenN
         <div className="job-list">
           {finished.length === 0 && <div className="empty">Aún no hay trabajos terminados.</div>}
           {finished.map((j) => (
-            <JobCard key={j.id} job={j} me={me} onLogs={setLogJob} />
+            <JobCard key={j.id} job={j} me={me} onLogs={setLogJob} catalog={catalog} />
           ))}
         </div>
       </section>

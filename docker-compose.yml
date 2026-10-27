@@ -21,7 +21,11 @@ services:
     restart: unless-stopped
 
   worker:
-    build: ./worker
+    build:
+      context: ./worker
+      args:
+        WITH_OFFICE: ${SNACKDROP_WORKER_OFFICE:-false}
+        WITH_AI: ${SNACKDROP_WORKER_AI:-false}
     environment:
       SNACKDROP_SERVER: http://backend:8000
       SNACKDROP_TOKEN: ${SNACKDROP_LOCAL_NODE_TOKEN:?Ejecuta ./setup.sh}
