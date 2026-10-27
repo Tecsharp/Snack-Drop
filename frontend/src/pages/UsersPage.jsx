@@ -1,13 +1,79 @@
 import { useCallback, useEffect, useState } from 'react'
-import { KeyRound, Trash2, UserPlus } from 'lucide-react'
+import { Check, Copy, KeyRound, Trash2, UserPlus, Users } from 'lucide-react'
 import { api } from '../api.js'
+import Toolbar from '../components/Toolbar.jsx'
 import { formatDate } from '../format.js'
-import Modal from '../components/Modal.jsx'
+import { Alert, Empty, initials, Segmented, Sheet, Toggle } from '../ui.jsx'
+
+function SecretSheet({ secret, onClose }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <Sheet title="Contraseña temporal" onClose={onClose} footer={<button className="btn primary" onClick={onClose}>Listo</button>}>
+      <p className="small" style={{ margin: 0 }}>
+        Entrega esta contraseña a <b>{secret.username}</b> por un canal seguro. Tendrá que cambiarla al iniciar sesión y no se volverá
+        a mostrar.
+      </p>
+      <div className="copy-field">
+        <code style={{ fontSize: 16 }}>{secret.password}</code>
+        <button
+          className="icon-btn"
+          aria-label="Copiar contraseña"
+          onClick={() => {
+            navigator.clipboard?.writeText(secret.password)
+            setCopied(true)
+          }}
+        >
+          {copied ? <Check size={15} /> : <Copy size={15} />}
+        </button>
+      </div>
+    </Sheet>
+  )
+}
+
+function CreateSheet({ onClose, onCreated }) {
+  const [username, setUsername] = useState('')
+  const [role, setRole] = useState('user')
+  const [error, setError] = useState('')
+  const submit = async (e) => {
+    e.preventDefault()
+    setError('')
+    try {
+      onCreated(await api.post('/api/users', { username, role }))
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+  return (
+    <Sheet
+      title="Nuevo usuario"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>Cancelar</button>
+          <button className="btn primary" form="new-user" disabled={username.trim().length < 3}>Crear</button>
+        </>
+      }
+    >
+      <form id="new-user" className="stack" onSubmit={submit}>
+        <label className="field">
+          Nombre de usuario
+          <input autoFocus value={username} onChange={(e) => setUsername(e.target.value)} minLength={3} maxLength={32} placeholder="maria.lopez" autoComplete="off" />
+          <span className="field-help">3 a 32 caracteres: letras, números, punto, guion o guion bajo.</span>
+        </label>
+        <div className="field">
+          <span>Rol</span>
+          <Segmented full label="Rol" value={role} onChange={setRole} options={[{ value: 'user', label: 'Usuario' }, { value: 'admin', label: 'Administrador' }]} />
+        </div>
+        <p className="caption" style={{ margin: 0 }}>Se generará una contraseña temporal segura que deberá cambiar al entrar.</p>
+        {error && <Alert tone="error">{error}</Alert>}
+      </form>
+    </Sheet>
+  )
+}
 
 export default function UsersPage({ me }) {
   const [users, setUsers] = useState([])
-  const [username, setUsername] = useState('')
-  const [role, setRole] = useState('user')
+  const [creating, setCreating] = useState(false)
   const [secret, setSecret] = useState(null)
   const [error, setError] = useState('')
 
@@ -26,117 +92,81 @@ export default function UsersPage({ me }) {
     }
   }
 
-  const create = (e) => {
-    e.preventDefault()
-    run(async () => {
-      const res = await api.post('/api/users', { username, role })
-      setSecret({ username: res.user.username, password: res.temporary_password })
-      setUsername('')
-      setRole('user')
-    })
-  }
-
   return (
     <>
-      <section className="panel">
-        <div className="panel-head">
-          <div className="panel-title">
-            <UserPlus size={18} /> Crear usuario
-          </div>
+      <Toolbar title="Usuarios" subtitle="Solo los administradores pueden crear cuentas. No hay registro público.">
+        <button className="btn primary" onClick={() => setCreating(true)}>
+          <UserPlus size={16} aria-hidden="true" /> Nuevo usuario
+        </button>
+      </Toolbar>
+      <div className="page">
+        {error && <Alert tone="error">{error}</Alert>}
+        <div className="group">
+          {users.length === 0 && <Empty icon={Users} title="Cargando usuarios…" />}
+          {users.map((u) => (
+            <div key={u.id} className="list-row" style={{ flexWrap: 'wrap' }}>
+              <span className="avatar" aria-hidden="true">{initials(u.username)}</span>
+              <div className="grow">
+                <div className="row" style={{ gap: 6 }}>
+                  <span className="title truncate">{u.username}</span>
+                  {u.id === me.id && <span className="pill">tú</span>}
+                  {u.must_change_password && <span className="pill orange">contraseña temporal</span>}
+                  {!u.is_active && <span className="pill red">desactivado</span>}
+                </div>
+                <div className="caption">Último acceso: {formatDate(u.last_login_at)}</div>
+              </div>
+              <div className="row wrap" style={{ gap: 10 }}>
+                <Segmented
+                  label={`Rol de ${u.username}`}
+                  value={u.role}
+                  onChange={(role) => u.id !== me.id && run(() => api.patch(`/api/users/${u.id}`, { role }))}
+                  options={[{ value: 'user', label: 'Usuario' }, { value: 'admin', label: 'Admin' }]}
+                />
+                {u.id !== me.id && (
+                  <div style={{ width: 120 }}>
+                    <Toggle label="Activo" checked={u.is_active} onChange={(v) => run(() => api.patch(`/api/users/${u.id}`, { is_active: v }))} />
+                  </div>
+                )}
+                <button
+                  className="icon-btn"
+                  title="Restablecer contraseña"
+                  aria-label={`Restablecer contraseña de ${u.username}`}
+                  onClick={() =>
+                    run(async () => {
+                      const res = await api.post(`/api/users/${u.id}/reset-password`)
+                      setSecret({ username: u.username, password: res.temporary_password })
+                    })
+                  }
+                >
+                  <KeyRound size={16} />
+                </button>
+                {u.id !== me.id && (
+                  <button
+                    className="icon-btn danger"
+                    title="Eliminar"
+                    aria-label={`Eliminar a ${u.username}`}
+                    onClick={() => window.confirm(`¿Eliminar a ${u.username} y todos sus trabajos?`) && run(() => api.del(`/api/users/${u.id}`))}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
         </div>
-        <form className="row gap wrap pad" onSubmit={create}>
-          <input placeholder="usuario" value={username} onChange={(e) => setUsername(e.target.value)} required minLength={3} maxLength={32} />
-          <select value={role} onChange={(e) => setRole(e.target.value)}>
-            <option value="user">Usuario</option>
-            <option value="admin">Administrador</option>
-          </select>
-          <button className="btn primary">Crear con contraseña temporal</button>
-        </form>
-        {error && <div className="alert error small">{error}</div>}
-      </section>
-      <section className="panel">
-        <div className="panel-head">
-          <div className="panel-title">Usuarios ({users.length})</div>
-        </div>
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Usuario</th>
-                <th>Rol</th>
-                <th>Estado</th>
-                <th>Último acceso</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((u) => (
-                <tr key={u.id}>
-                  <td>
-                    {u.username} {u.id === me.id && <span className="pill">tú</span>}
-                  </td>
-                  <td>
-                    <select
-                      value={u.role}
-                      disabled={u.id === me.id}
-                      onChange={(e) => run(() => api.patch(`/api/users/${u.id}`, { role: e.target.value }))}
-                    >
-                      <option value="user">Usuario</option>
-                      <option value="admin">Administrador</option>
-                    </select>
-                  </td>
-                  <td>
-                    <label className="check">
-                      <input
-                        type="checkbox"
-                        checked={u.is_active}
-                        disabled={u.id === me.id}
-                        onChange={(e) => run(() => api.patch(`/api/users/${u.id}`, { is_active: e.target.checked }))}
-                      />{' '}
-                      {u.is_active ? 'Activo' : 'Desactivado'}
-                    </label>
-                    {u.must_change_password && <div className="muted small">Debe cambiar contraseña</div>}
-                  </td>
-                  <td className="small muted">{formatDate(u.last_login_at)}</td>
-                  <td className="row gap">
-                    <button
-                      className="btn outline"
-                      onClick={() =>
-                        run(async () => {
-                          const res = await api.post(`/api/users/${u.id}/reset-password`)
-                          setSecret({ username: u.username, password: res.temporary_password })
-                        })
-                      }
-                    >
-                      <KeyRound size={14} /> Restablecer
-                    </button>
-                    {u.id !== me.id && (
-                      <button
-                        className="icon-btn danger"
-                        title="Eliminar"
-                        onClick={() => window.confirm(`¿Eliminar a ${u.username} y sus trabajos?`) && run(() => api.del(`/api/users/${u.id}`))}
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      {secret && (
-        <Modal title="Contraseña temporal" onClose={() => setSecret(null)}>
-          <p>
-            Entrega esta contraseña a <b>{secret.username}</b> por un canal seguro. Deberá cambiarla al iniciar sesión y no se
-            volverá a mostrar.
-          </p>
-          <div className="copy-field">
-            <code>{secret.password}</code>
-          </div>
-        </Modal>
+        <p className="footnote">Desactivar, cambiar el rol o restablecer la contraseña cierra las sesiones abiertas de esa persona.</p>
+      </div>
+      {creating && (
+        <CreateSheet
+          onClose={() => setCreating(false)}
+          onCreated={async (res) => {
+            setCreating(false)
+            setSecret({ username: res.user.username, password: res.temporary_password })
+            await load()
+          }}
+        />
       )}
+      {secret && <SecretSheet secret={secret} onClose={() => setSecret(null)} />}
     </>
   )
 }

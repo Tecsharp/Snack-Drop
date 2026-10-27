@@ -1,5 +1,6 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
+import './appearance.js'
 import App from './App.jsx'
 import './styles.css'
 
@@ -17,10 +18,10 @@ class ErrorBoundary extends React.Component {
     if (this.state.error) {
       return (
         <div className="center-screen">
-          <div className="card auth-card">
-            <h2>Algo salió mal</h2>
-            <p className="muted small">{String(this.state.error.message || this.state.error)}</p>
-            <button className="btn primary" onClick={() => window.location.reload()}>
+          <div className="auth">
+            <h1>Algo salió mal</h1>
+            <p className="secondary small">{String(this.state.error.message || this.state.error)}</p>
+            <button className="btn primary large block" onClick={() => window.location.reload()}>
               Recargar
             </button>
           </div>

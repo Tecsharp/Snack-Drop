@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api.js'
-import Modal from './Modal.jsx'
 import { formatTime } from '../format.js'
+import { Alert, Sheet } from '../ui.jsx'
 
 export default function LogModal({ job, liveEvents, onClose }) {
   const [initial, setInitial] = useState(null)
@@ -22,19 +22,21 @@ export default function LogModal({ job, liveEvents, onClose }) {
     bottom.current?.scrollIntoView({ block: 'end' })
   }, [lines.length])
 
+  const tone = (line) => (/ERROR|falló/i.test(line) ? 'err' : /OMITIDO/.test(line) ? 'skip' : '')
+
   return (
-    <Modal title={`Logs · ${job.title}`} onClose={onClose} wide>
-      {error && <div className="alert error">{error}</div>}
-      <pre className="terminal">
+    <Sheet title={`Registro · ${job.title}`} onClose={onClose} wide>
+      {error && <Alert tone="error">{error}</Alert>}
+      <pre className="terminal" aria-live="polite">
         {initial === null && !error ? 'Cargando…' : null}
         {lines.map((l, i) => (
-          <div key={i}>
-            <span className="muted">{formatTime(l.ts, true)} </span>
+          <div key={i} className={tone(l.line)}>
+            <span className="ts">{formatTime(l.ts, true)} </span>
             {l.line}
           </div>
         ))}
         <span ref={bottom} />
       </pre>
-    </Modal>
+    </Sheet>
   )
 }
