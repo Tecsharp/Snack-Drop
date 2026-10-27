@@ -2,90 +2,32 @@ import { useMemo, useRef, useState } from 'react'
 import { Sparkles, Upload, Send, X } from 'lucide-react'
 import { api } from '../api.js'
 import { formatBytes } from '../format.js'
+import SchemaForm from './SchemaForm.jsx'
 
-function ImageParams({ params, set }) {
-  return (
-    <div className="param-grid">
-      <label>
-        Formato
-        <select value={params.format} onChange={(e) => set({ format: e.target.value })}>
-          <option value="webp">WebP</option>
-          <option value="jpeg">JPEG</option>
-          <option value="png">PNG</option>
-        </select>
-      </label>
-      <label>
-        Calidad: {params.quality}
-        <input
-          type="range"
-          min="1"
-          max="100"
-          value={params.quality}
-          disabled={params.format === 'png' || params.lossless}
-          onChange={(e) => set({ quality: Number(e.target.value) })}
-        />
-      </label>
-      <label>
-        Ancho máx. (px)
-        <input
-          type="number"
-          min="16"
-          max="16384"
-          placeholder="Original"
-          value={params.max_width ?? ''}
-          onChange={(e) => set({ max_width: e.target.value ? Number(e.target.value) : null })}
-        />
-      </label>
-      <label>
-        Alto máx. (px)
-        <input
-          type="number"
-          min="16"
-          max="16384"
-          placeholder="Original"
-          value={params.max_height ?? ''}
-          onChange={(e) => set({ max_height: e.target.value ? Number(e.target.value) : null })}
-        />
-      </label>
-      {params.format === 'webp' && (
-        <label className="check">
-          <input type="checkbox" checked={params.lossless} onChange={(e) => set({ lossless: e.target.checked })} /> Sin pérdida
-        </label>
-      )}
-      <label className="check">
-        <input type="checkbox" checked={params.strip_metadata} onChange={(e) => set({ strip_metadata: e.target.checked })} />{' '}
-        Quitar metadatos (EXIF/GPS)
-      </label>
-      <label className="check">
-        <input type="checkbox" checked={params.never_larger} onChange={(e) => set({ never_larger: e.target.checked })} /> Nunca
-        más grande que el original
-      </label>
-      {params.format !== 'png' && !params.lossless && params.quality > 90 && (
-        <div className="alert warn small" style={{ gridColumn: '1 / -1' }}>
-          Calidad mayor a 90 casi siempre produce archivos más pesados que un JPEG de cámara. Para fotos, 75–85 se ve igual y pesa
-          mucho menos.
-        </div>
-      )}
-    </div>
-  )
+const GROUPS = [
+  { exts: ['.heic', '.heif'], op: 'image.heic' },
+  { exts: ['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tif', '.tiff', '.gif', '.avif'], op: 'image.convert' },
+  { exts: ['.pdf'], op: 'pdf.compress' },
+  { exts: ['.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.mpg', '.mpeg', '.wmv', '.flv', '.ts', '.3gp', '.mts'], op: 'video.compress' },
+  { exts: ['.mp3', '.wav', '.flac', '.aac', '.m4a', '.ogg', '.opus', '.wma', '.aiff', '.aif'], op: 'audio.convert' },
+  { exts: ['.doc', '.docx', '.odt', '.rtf', '.xls', '.xlsx', '.ods', '.ppt', '.pptx', '.odp'], op: 'doc.to_pdf' },
+  { exts: ['.zip', '.7z', '.tar', '.gz', '.tgz', '.bz2', '.xz'], op: 'archive.extract' },
+]
+
+const extOf = (name) => (name.lastIndexOf('.') >= 0 ? name.slice(name.lastIndexOf('.')).toLowerCase() : '')
+
+export function accepts(op, name) {
+  if (!op) return false
+  const exts = op.extensions || []
+  if (exts.includes('*')) return true
+  const lower = name.toLowerCase()
+  return exts.some((e) => lower.endsWith(e))
 }
 
-function PdfParams({ params, set }) {
-  return (
-    <div className="param-grid">
-      <label>
-        Nivel de compresión
-        <select value={params.level} onChange={(e) => set({ level: e.target.value })}>
-          <option value="low">Ligera (calidad de impresión)</option>
-          <option value="medium">Media (lectura en pantalla)</option>
-          <option value="high">Máxima (archivo más pequeño)</option>
-        </select>
-      </label>
-      <label className="check">
-        <input type="checkbox" checked={params.grayscale} onChange={(e) => set({ grayscale: e.target.checked })} /> Escala de grises
-      </label>
-    </div>
-  )
+/** Operación sugerida para un conjunto de archivos (si todos son del mismo tipo). */
+export function suggestOperation(names) {
+  const ops = new Set(names.map((n) => GROUPS.find((g) => g.exts.includes(extOf(n)))?.op || null))
+  return ops.size === 1 ? [...ops][0] : null
 }
 
 export default function NewJob({ catalog, nodes }) {
@@ -105,13 +47,18 @@ export default function NewJob({ catalog, nodes }) {
   const params = { ...(op?.defaults || {}), ...(paramsByOp[operation] || {}) }
   const setParams = (patch) => setParamsByOp((p) => ({ ...p, [operation]: { ...params, ...patch } }))
 
-  const accepted = useMemo(() => new Set(op?.extensions || []), [op])
-  const extOf = (name) => (name.lastIndexOf('.') >= 0 ? name.slice(name.lastIndexOf('.')).toLowerCase() : '')
-  const valid = files.filter((f) => accepted.has(extOf(f.name)))
+  const valid = useMemo(() => files.filter((f) => accepts(op, f.name)), [files, op])
   const invalid = files.length - valid.length
   const totalSize = valid.reduce((s, f) => s + f.size, 0)
 
   const eligibleNodes = nodes.filter((n) => !n.capabilities.length || n.capabilities.includes(operation))
+  const runnable = (id) => nodes.some((n) => n.online && n.capabilities.includes(id))
+  const categories = useMemo(() => {
+    const map = new Map()
+    catalog.forEach((c) => map.set(c.category, [...(map.get(c.category) || []), c]))
+    return [...map.entries()]
+  }, [catalog])
+  const tooFew = op && valid.length > 0 && valid.length < op.min_files
 
   const addFiles = (list) => {
     const incoming = Array.from(list || [])
@@ -120,10 +67,12 @@ export default function NewJob({ catalog, nodes }) {
       const seen = new Set(prev.map((f) => `${f.name}:${f.size}`))
       return [...prev, ...incoming.filter((f) => !seen.has(`${f.name}:${f.size}`))]
     })
-    // Elegir la operación según el tipo de archivo, si es obvia.
-    const exts = new Set(incoming.map((f) => extOf(f.name)))
-    if (exts.size === 1 && exts.has('.pdf')) setOperation('pdf.compress')
-    else if (![...exts].includes('.pdf')) setOperation('image.convert')
+    // Elegir la operación según el tipo de archivo, si la actual no los acepta.
+    const current = catalog.find((c) => c.id === operation)
+    if (!incoming.every((f) => accepts(current, f.name))) {
+      const suggested = suggestOperation(incoming.map((f) => f.name))
+      if (suggested && catalog.some((c) => c.id === suggested)) setOperation(suggested)
+    }
   }
 
   const askAssistant = async () => {
@@ -208,7 +157,7 @@ export default function NewJob({ catalog, nodes }) {
           {files.length === 0 ? (
             <>
               <Upload size={28} className="accent" />
-              <div>Arrastra imágenes o PDFs aquí, o haz clic para elegir</div>
+              <div>Arrastra imágenes, PDFs, videos, audios o documentos aquí, o haz clic para elegir</div>
               <div className="muted small">Puedes soltar cientos de archivos: se procesan como un lote.</div>
             </>
           ) : (
@@ -257,10 +206,15 @@ export default function NewJob({ catalog, nodes }) {
             <label>
               Operación
               <select value={operation} onChange={(e) => setOperation(e.target.value)}>
-                {catalog.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.title}
-                  </option>
+                {categories.map(([category, ops]) => (
+                  <optgroup key={category} label={category}>
+                    {ops.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.title}
+                        {runnable(c.id) ? '' : ' — sin nodo compatible'}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </label>
@@ -278,8 +232,27 @@ export default function NewJob({ catalog, nodes }) {
             </label>
           </div>
 
-          {operation === 'image.convert' && <ImageParams params={params} set={setParams} />}
-          {operation === 'pdf.compress' && <PdfParams params={params} set={setParams} />}
+          {op && (
+            <p className="muted small op-desc">
+              {op.description}
+              {op.mode === 'batch' ? ' Procesa todos los archivos juntos.' : ''}
+              {op.requires ? ` ${op.requires}.` : ''}
+            </p>
+          )}
+          {op && !runnable(op.id) && (
+            <div className="alert warn small">
+              Ningún nodo conectado puede ejecutar esta operación ahora. El trabajo quedará en cola hasta que se conecte uno
+              compatible.
+            </div>
+          )}
+          {op && <SchemaForm schema={op.schema} values={params} onChange={setParams} />}
+          {['image.convert', 'image.avif', 'image.heic'].includes(operation) && !params.lossless && params.quality > 90 && (
+            <div className="alert warn small">
+              Calidad mayor a 90 casi siempre produce archivos más pesados que un JPEG de cámara. Para fotos, 75–85 se ve igual y pesa
+              mucho menos.
+            </div>
+          )}
+          {tooFew && <div className="alert warn small">Esta operación necesita al menos {op.min_files} archivos.</div>}
 
           {error && <div className="alert error small">{error}</div>}
           {upload !== null && (
@@ -288,7 +261,7 @@ export default function NewJob({ catalog, nodes }) {
               <span className="progress-label">Subiendo {Math.round(upload * 100)}%</span>
             </div>
           )}
-          <button className="btn primary" onClick={submit} disabled={upload !== null || !valid.length}>
+          <button className="btn primary" onClick={submit} disabled={upload !== null || !valid.length || tooFew}>
             <Send size={16} /> Enviar {valid.length ? `${valid.length} archivo${valid.length === 1 ? '' : 's'}` : ''}
           </button>
         </div>

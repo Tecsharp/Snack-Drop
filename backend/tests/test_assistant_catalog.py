@@ -95,4 +95,61 @@ def test_assistant_endpoint(admin):
     assert r.status_code == 200
     assert r.json()["params"]["quality"] == 60
     cat = admin.get("/api/catalog").json()
-    assert {c["id"] for c in cat} == {"image.convert", "pdf.compress"}
+    assert len(cat) == 32 and {"image.convert", "pdf.compress", "video.compress"} <= {c["id"] for c in cat}
+
+
+@pytest.mark.parametrize(
+    "text,op,expected",
+    [
+        ("une estos pdf en uno solo", "pdf.merge", {}),
+        ("separa el pdf en 1-3,4-", "pdf.split", {"mode": "ranges", "ranges": "1-3,4-"}),
+        ("convierte las fotos a un pdf tamaño A4", "pdf.from_images", {"page_size": "a4"}),
+        ("pasa el pdf a imagenes jpg a 300 dpi", "pdf.to_images", {"format": "jpeg", "dpi": 300}),
+        ("gira el pdf 180 grados", "pdf.rotate", {"angle": 180}),
+        ("protege el pdf con contraseña «Hola1234»", "pdf.protect", {"password": "Hola1234"}),
+        ("hazlo buscable con OCR", None, {}),
+        ("aplica OCR al pdf escaneado", "pdf.ocr", {"language": "spa+eng"}),
+        ("ponle marca de agua 'BORRADOR' al pdf", "pdf.watermark", {"text": "BORRADOR"}),
+        ("comprime este video en h265 a 1080p", "video.compress", {"codec": "h265", "max_height": 1080}),
+        ("baja el video a 720p", "video.resize", {"height": 720}),
+        ("convierte el video a mp4", "video.convert", {"container": "mp4"}),
+        ("saca el audio del video en mp3", "video.extract_audio", {"format": "mp3"}),
+        ("haz un gif del video", "video.gif", {"format": "gif"}),
+        ("genera miniaturas del video", "video.thumbnails", {"mode": "sheet"}),
+        ("convierte estos audios a flac", "audio.convert", {"format": "flac"}),
+        ("normaliza el volumen del podcast", "audio.normalize", {}),
+        ("transcribe el audio en español a subtitulos", "audio.transcribe", {"language": "es", "output": "srt"}),
+        ("convierte las fotos heic a jpg", "image.heic", {"format": "jpeg"}),
+        ("quita el fondo de estas fotos", "image.remove_bg", {}),
+        ("elimina los metadatos gps", "image.strip", {}),
+        ("ponle marca de agua «© Abisai» a las fotos", "image.watermark", {"text": "© Abisai"}),
+        ("recorta a 16:9", "image.crop", {"aspect": "16:9"}),
+        ("amplia las imagenes x4", "image.upscale", {"scale": 4}),
+        ("renombra las fotos por fecha", "image.rename", {"sort": "date"}),
+        ("convierte el word a pdf", "doc.to_pdf", {}),
+        ("descomprime el zip", "archive.extract", {}),
+        ("mete todo en un 7z", "archive.zip", {"format": "7z"}),
+        ("calcula el sha256", "file.hash", {"algorithm": "sha256"}),
+    ],
+)
+def test_local_planner_new_operations(text, op, expected):
+    plan = assistant.plan_locally(text)
+    assert plan["operation"] == op, plan
+    for k, v in expected.items():
+        assert plan["params"][k] == v
+
+
+def test_catalog_has_all_operations_and_secrets():
+    from app.catalog import OPERATIONS, redact, scrub, secret_fields
+
+    assert len(OPERATIONS) == 32
+    assert secret_fields("pdf.protect") == {"password", "owner_password"}
+    p = validate_job("pdf.protect", {"password": "Secreto-1"})
+    assert redact("pdf.protect", p)["password"] == "••••"
+    assert scrub("pdf.protect", p)["password"] == ""
+    with pytest.raises(CatalogError):
+        validate_job("pdf.split", {"mode": "ranges", "ranges": "1;rm -rf"})
+    with pytest.raises(CatalogError):
+        validate_job("archive.zip", {"output_name": "../../etc"})
+    assert accepts_file("archive.zip", "cualquier.cosa") and accepts_file("archive.extract", "x.tar.gz")
+    assert not accepts_file("video.compress", "foto.jpg")

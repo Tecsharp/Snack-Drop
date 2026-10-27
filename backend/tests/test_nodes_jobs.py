@@ -109,12 +109,13 @@ def test_node_websocket_rejects_bad_token(client):
 
 def _run_agent(server_url: str, token: str, tmp_path, stop: threading.Event):
     from snackdrop_worker.agent import Agent, WorkerConfig
+    from snackdrop_worker.processors import available_operations
 
     cfg = WorkerConfig(
         server=server_url,
         token=token,
         work_dir=tmp_path / "worker",
-        allowed_operations=["image.convert", "pdf.compress"],
+        allowed_operations=available_operations(),
         hostname="test-node",
     )
 
@@ -308,3 +309,117 @@ def test_retention_zero_keeps_everything(tmp_path):
 
     app = create_app(replace(make_settings(tmp_path), retention_days=0))
     assert asyncio.run(purge_expired(app)) == 0
+
+
+def _pdf_bytes(pages: int) -> bytes:
+    import pikepdf
+
+    buf = io.BytesIO()
+    doc = pikepdf.new()
+    for _ in range(pages):
+        doc.add_blank_page()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def test_end_to_end_batch_multi_output_and_secrets(live_server, tmp_path):
+    from conftest import ADMIN_PASSWORD
+
+    app, url = live_server
+    stop = threading.Event()
+    thread = threading.Thread(target=_run_agent, args=(url, LOCAL_TOKEN, tmp_path, stop), daemon=True)
+    thread.start()
+    try:
+        with httpx.Client(base_url=url, headers=CSRF, timeout=30) as http:
+            http.post("/api/auth/login", json={"username": "admin", "password": ADMIN_PASSWORD})
+            node = _wait_online(http)
+            assert {"pdf.merge", "pdf.split", "archive.zip"} <= set(node["capabilities"])
+
+            # Varios trabajos enviados a la vez: el nodo los recibe seguidos y no debe perder ninguno.
+            ids = [
+                http.post("/api/jobs", data={"operation": "image.convert"},
+                          files=[("files", (f"r{i}.png", png_bytes((64, 64)), "image/png"))]).json()["id"]
+                for i in range(6)
+            ]
+            assert [_wait_job(http, i)["status"] for i in ids] == ["done"] * 6
+
+            # Unir necesita al menos 2 archivos
+            r = http.post("/api/jobs", data={"operation": "pdf.merge"}, files=[("files", ("a.pdf", _pdf_bytes(1), "application/pdf"))])
+            assert r.status_code == 400
+
+            # Lote: varios PDFs → uno
+            r = http.post("/api/jobs", data={"operation": "pdf.merge", "params": json.dumps({"output_name": "todo"})},
+                          files=[("files", (f"{n}.pdf", _pdf_bytes(2), "application/pdf")) for n in ("a", "b", "c")])
+            job = _wait_job(http, r.json()["id"])
+            assert job["status"] == "done", job
+            assert [o["filename"] for o in job["outputs"]] == ["todo.pdf"]
+
+            # Un archivo → varios resultados
+            r = http.post("/api/jobs", data={"operation": "pdf.split", "params": json.dumps({"mode": "each_page"})},
+                          files=[("files", ("doc.pdf", _pdf_bytes(3), "application/pdf"))])
+            job = _wait_job(http, r.json()["id"])
+            assert sorted(o["filename"] for o in job["outputs"]) == ["doc_p1.pdf", "doc_p2.pdf", "doc_p3.pdf"]
+
+            # Contraseña: el nodo la recibe, la API nunca la muestra y no queda guardada
+            r = http.post("/api/jobs", data={"operation": "pdf.protect", "params": json.dumps({"password": "Super-Secreta-9"})},
+                          files=[("files", ("c.pdf", _pdf_bytes(1), "application/pdf"))])
+            assert r.json()["params"]["password"] == "••••"
+            job = _wait_job(http, r.json()["id"])
+            assert job["status"] == "done" and job["params"]["password"] == ""
+            assert "Super-Secreta-9" not in json.dumps(http.get(f"/api/jobs/{job['id']}/logs").json())
+            from app.models import Job
+
+            db = app.state.SessionLocal()
+            assert db.get(Job, job["id"]).params["password"] == ""
+            db.close()
+            import pikepdf
+
+            out = http.get(f"/api/jobs/{job['id']}/download").content
+            with pytest.raises(pikepdf.PasswordError):
+                pikepdf.open(io.BytesIO(out))
+            assert pikepdf.open(io.BytesIO(out), password="Super-Secreta-9")
+    finally:
+        stop.set()
+        thread.join(timeout=15)
+
+
+def test_dispatch_prefers_gpu_for_video(admin, app):
+    import asyncio
+
+    from app.models import Job, Node
+    from app.realtime import NodeConn
+    from app.security import hash_node_token
+
+    class FakeWS:
+        def __init__(self):
+            self.sent = []
+
+        async def send_json(self, msg):
+            self.sent.append(msg)
+
+    db = app.state.SessionLocal()
+    owner = db.get(Node, 1).owner_id
+    cpu = Node(name="cpu", owner_id=owner, token_hash=hash_node_token("sdn_cpu"), shared_with_all=True, capabilities=[])
+    gpu = Node(name="gpu", owner_id=owner, token_hash=hash_node_token("sdn_gpu"), shared_with_all=True, capabilities=[])
+    db.add_all([cpu, gpu])
+    db.commit()
+    caps = ["image.convert", "video.compress"]
+    hub = app.state.hub
+    hub.nodes[cpu.id] = NodeConn(ws=FakeWS(), node_id=cpu.id, capabilities=caps)
+    hub.nodes[gpu.id] = NodeConn(ws=FakeWS(), node_id=gpu.id, capabilities=caps, hw_encoders=["h264_nvenc"], gpu=True)
+    cpu_id, gpu_id = cpu.id, gpu.id
+    db.close()
+
+    video = admin.post("/api/jobs", data={"operation": "video.compress"}, files={"files": ("v.mp4", b"x", "video/mp4")}).json()
+    assert admin.get(f"/api/jobs/{video['id']}").json()["assigned_node_name"] == "gpu"
+    image = admin.post("/api/jobs", data={"operation": "image.convert"}, files={"files": ("i.png", png_bytes(), "image/png")}).json()
+    assert admin.get(f"/api/jobs/{image['id']}").json()["assigned_node_name"] == "cpu"
+
+    # Sin el nodo GPU, el video igual corre en CPU
+    del hub.nodes[gpu_id]
+    hub.nodes[cpu_id].job_id = None
+    video2 = admin.post("/api/jobs", data={"operation": "video.compress"}, files={"files": ("w.mp4", b"x", "video/mp4")}).json()
+    assert admin.get(f"/api/jobs/{video2['id']}").json()["assigned_node_name"] == "cpu"
+    hub.nodes.clear()
+    assert Job
+    assert asyncio

@@ -1,12 +1,15 @@
 import { useState } from 'react'
-import { Download, FileImage, FileText, Server, SquareTerminal, Trash2, X } from 'lucide-react'
+import { Download, FileArchive, FileAudio, FileImage, FileText, FileVideo, Server, SquareTerminal, Trash2, X } from 'lucide-react'
 import { api } from '../api.js'
 import { describeParams, formatBytes, formatDate, formatDuration, isActive, statusLabel } from '../format.js'
 
-export default function JobCard({ job, me, onLogs }) {
+const ICONS = { image: FileImage, pdf: FileText, video: FileVideo, audio: FileAudio, doc: FileText, archive: FileArchive, file: FileArchive }
+
+export default function JobCard({ job, me, onLogs, catalog = [] }) {
   const [error, setError] = useState('')
   const active = isActive(job)
-  const Icon = job.operation === 'pdf.compress' ? FileText : FileImage
+  const Icon = ICONS[job.operation.split('.')[0]] || FileImage
+  const op = catalog.find((c) => c.id === job.operation)
   const node = job.assigned_node_name || job.target_node_name
   const isOwner = me.role === 'admin' || job.owner_id === me.id
 
@@ -22,7 +25,7 @@ export default function JobCard({ job, me, onLogs }) {
   const meta = [
     `${job.inputs.length} archivo${job.inputs.length === 1 ? '' : 's'}`,
     formatBytes(job.input_size),
-    describeParams(job.operation, job.params),
+    describeParams(job.operation, job.params, op),
   ]
   if (job.started_at) meta.push(formatDuration(job.started_at, job.finished_at))
   if (job.status === 'done' && job.output_size) meta.push(`→ ${formatBytes(job.output_size)}`)

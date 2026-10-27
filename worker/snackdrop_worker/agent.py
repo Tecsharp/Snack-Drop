@@ -8,12 +8,14 @@ No abre puertos ni permite acceso remoto al equipo.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import platform
 import shutil
 import socket
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,9 +24,15 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from . import __version__
-from .processors import PROCESSORS, ProcessingError, process
+from .processors import Cancelled, Context, ProcessingError, available_operations, get, run_batch, run_each
+from .processors.media import hw_encoders
 
 log = logging.getLogger("snackdrop.worker")
+
+
+# Operaciones cuyo objetivo es reducir tamaño: solo en ellas tiene sentido el porcentaje final.
+SIZE_OPERATIONS = {"image.convert", "image.heic", "image.avif", "pdf.compress", "video.compress", "video.resize",
+                   "video.convert", "audio.convert", "archive.zip"}
 
 
 class JobCancelled(Exception):
@@ -47,12 +55,13 @@ class WorkerConfig:
         if not server or not token:
             raise SystemExit("Define SNACKDROP_SERVER y SNACKDROP_TOKEN (ver setup-worker.sh).")
         allowed_env = os.getenv("SNACKDROP_ALLOWED_OPERATIONS", "").strip()
-        allowed = [op.strip() for op in allowed_env.split(",") if op.strip()] if allowed_env else list(PROCESSORS)
+        available = available_operations()
+        allowed = [op.strip() for op in allowed_env.split(",") if op.strip()] if allowed_env else available
         return cls(
             server=server,
             token=token,
             work_dir=Path(os.getenv("SNACKDROP_WORK_DIR", tempfile.gettempdir())) / "snackdrop-worker",
-            allowed_operations=[op for op in allowed if op in PROCESSORS],
+            allowed_operations=[op for op in allowed if op in available],
             hostname=os.getenv("SNACKDROP_NODE_HOSTNAME") or socket.gethostname(),
             verify_tls=os.getenv("SNACKDROP_VERIFY_TLS", "true").lower() not in {"0", "false", "no"},
         )
@@ -78,7 +87,12 @@ def system_info(hostname: str) -> dict:
             accelerator = "Apple"
         else:
             accelerator = _cpu_vendor() or "CPU"
-    return {"hostname": hostname, "os": os_name, "arch": arch, "accelerator": accelerator, "version": __version__}
+    try:
+        encoders = hw_encoders()
+    except Exception:  # noqa: BLE001
+        encoders = []
+    return {"hostname": hostname, "os": os_name, "arch": arch, "accelerator": accelerator, "version": __version__,
+            "hw_encoders": encoders}
 
 
 def _cpu_vendor() -> str | None:
@@ -102,6 +116,8 @@ class Agent:
     _current: asyncio.Task | None = None
     _current_id: str | None = None
     _cancel: asyncio.Event = field(default_factory=asyncio.Event)
+    _queue: asyncio.Queue | None = None
+    _skip: set = field(default_factory=set)
     _stop: asyncio.Event = field(default_factory=asyncio.Event)
 
     # --- Conexión ------------------------------------------------------------
@@ -149,6 +165,9 @@ class Agent:
                 "capabilities": self.config.allowed_operations,
             }))
             log.info("Conectado a %s con capacidades %s", self.config.server, self.config.allowed_operations)
+            self._queue = asyncio.Queue()
+            self._skip.clear()
+            runner = asyncio.create_task(self._run_queue(self._queue))
             try:
                 async for raw in ws:
                     await self._on_message(_loads(raw))
@@ -156,10 +175,31 @@ class Agent:
                         break
             finally:
                 self._ws = None
-                if self._current and not self._current.done():
-                    # El servidor reencola el trabajo al perder la conexión.
-                    self._cancel.set()
-                    self._current.cancel()
+                self._queue = None
+                # El servidor reencola los trabajos al perder la conexión.
+                self._cancel.set()
+                runner.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await runner
+
+    async def _run_queue(self, queue: asyncio.Queue) -> None:
+        """Ejecuta los trabajos de uno en uno, en el orden en que el servidor los asignó."""
+        while True:
+            job = await queue.get()
+            job_id = str(job.get("id", ""))
+            if job_id in self._skip:
+                self._skip.discard(job_id)
+                await self._release(job_id)
+                continue
+            self._cancel = asyncio.Event()
+            self._current_id = job_id
+            self._current = asyncio.create_task(self.run_job(job))
+            await self._current  # si se cancela el runner, se cancela también el trabajo
+
+    async def _release(self, job_id: str) -> None:
+        async with httpx.AsyncClient(headers={"Authorization": f"Bearer {self.config.token}"}, timeout=30,
+                                     verify=self.config.verify_tls) as client:
+            await _safe_post(client, f"{self.config.server}/api/worker/jobs/{job_id}/complete", {"ok": False, "error": "Cancelado"})
 
     async def _on_message(self, msg: dict) -> None:
         kind = msg.get("type")
@@ -167,16 +207,16 @@ class Agent:
             log.info("Registrado como nodo '%s'", msg.get("node", {}).get("name"))
         elif kind == "job.assign":
             job = msg.get("job") or {}
-            if self._current and not self._current.done():
-                log.warning("Trabajo recibido mientras otro está en curso; se ignora %s", job.get("id"))
-                return
-            self._cancel = asyncio.Event()
-            self._current_id = job.get("id")
-            self._current = asyncio.create_task(self.run_job(job))
+            if self._queue is not None:
+                # Puede llegar mientras el anterior aún confirma su cierre: se encola, nunca se descarta.
+                self._queue.put_nowait(job)
         elif kind == "job.cancel":
-            if msg.get("job_id") == self._current_id:
-                log.info("Cancelación solicitada para %s", self._current_id)
+            job_id = msg.get("job_id")
+            if job_id == self._current_id:
+                log.info("Cancelación solicitada para %s", job_id)
                 self._cancel.set()
+            elif job_id:
+                self._skip.add(job_id)
 
     async def _send(self, msg: dict) -> None:
         if self._ws is not None:
@@ -233,23 +273,58 @@ class Agent:
 
                 outputs: list[Path] = []
                 errors: list[dict] = []
-                for i, (src, name) in enumerate(local):
-                    self._check_cancel()
-                    await self.progress(job_id, "processing", 20 + 70 * i / total, f"Procesando {i + 1}/{total}: {name}")
-                    try:
-                        out, info = await asyncio.to_thread(process, operation, params, src, out_dir, name)
-                    except ProcessingError as exc:
-                        # Un archivo dañado no debe tumbar el lote completo.
-                        errors.append({"filename": name, "error": str(exc)[:2000]})
-                        await self.log_line(job_id, f"OMITIDO: {exc}")
-                        continue
-                    outputs.append(out)
-                    await self.log_line(job_id, info)
+                op = get(operation)
+                loop = asyncio.get_running_loop()
+                tmp = work / "tmp"
+                tmp.mkdir(parents=True, exist_ok=True)
+
+                def make_ctx(index: int, count: int, label: str) -> Context:
+                    last = [0.0]
+
+                    def on_progress(frac: float) -> None:
+                        now = time.monotonic()
+                        if now - last[0] < 0.5 and frac < 1:
+                            return
+                        last[0] = now
+                        pct = 20 + 70 * (index + frac) / count
+                        msg = f"Procesando {label} · {frac * 100:.0f}%"
+                        asyncio.run_coroutine_threadsafe(self.progress(job_id, "processing", pct, msg), loop)
+
+                    def on_log(line: str) -> None:
+                        asyncio.run_coroutine_threadsafe(self.log_line(job_id, line), loop)
+
+                    return Context(index=index, total=count, on_progress=on_progress, on_log=on_log,
+                                   is_cancelled=self._cancel.is_set, tmp_dir=tmp)
+
+                if op.mode == "batch":
+                    await self.progress(job_id, "processing", 20, f"Procesando lote de {len(local)} archivo(s)")
+                    ctx = make_ctx(0, 1, f"lote de {len(local)}")
+                    results = await asyncio.to_thread(run_batch, operation, params, local, out_dir, ctx)
+                    for out, info in results:
+                        outputs.append(out)
+                        await self.log_line(job_id, info)
+                else:
+                    for i, (src, name) in enumerate(local):
+                        self._check_cancel()
+                        await self.progress(job_id, "processing", 20 + 70 * i / total, f"Procesando {i + 1}/{total}: {name}")
+                        ctx = make_ctx(i, total, f"{i + 1}/{total}: {name}")
+                        try:
+                            results = await asyncio.to_thread(run_each, operation, params, src, out_dir, name, ctx)
+                        except ProcessingError as exc:
+                            # Un archivo dañado no debe tumbar el lote completo.
+                            errors.append({"filename": name, "error": str(exc)[:2000]})
+                            await self.log_line(job_id, f"OMITIDO: {exc}")
+                            continue
+                        for out, info in results:
+                            outputs.append(out)
+                            await self.log_line(job_id, info)
                 if not outputs:
                     failures = errors
-                    raise ProcessingError(
-                        errors[0]["error"] if len(errors) == 1 else f"Ningún archivo se pudo procesar ({len(errors)} errores)"
-                    )
+                    if errors:
+                        raise ProcessingError(
+                            errors[0]["error"] if len(errors) == 1 else f"Ningún archivo se pudo procesar ({len(errors)} errores)"
+                        )
+                    raise ProcessingError("La operación no generó resultados")
                 await self.progress(job_id, "processing", 90, "Procesamiento terminado")
 
                 for i, out in enumerate(outputs):
@@ -264,10 +339,10 @@ class Agent:
                 summary = f"{len(outputs)} archivo(s) listos"
                 if errors:
                     summary += f" · {len(errors)} omitido(s)"
-                if before:
+                if before and operation in SIZE_OPERATIONS:
                     summary += f" · {after * 100 / before:.0f}% del tamaño original"
                 await client.post(f"{base}/complete", json={"ok": True, "summary": summary, "failures": errors})
-            except (JobCancelled, asyncio.CancelledError):
+            except (JobCancelled, Cancelled, asyncio.CancelledError):
                 await self.log_line(job_id, "Trabajo cancelado")
                 await _safe_post(client, f"{base}/complete", {"ok": False, "error": "Cancelado"})
             except Exception as exc:  # noqa: BLE001 - se reporta al servidor

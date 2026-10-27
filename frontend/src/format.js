@@ -63,7 +63,8 @@ export const statusLabel = (s) => STATUS_LABELS[s] || s
 export const ACTIVE = ['queued', 'assigned', 'downloading', 'processing', 'uploading']
 export const isActive = (job) => ACTIVE.includes(job.status)
 
-export function describeParams(operation, params = {}) {
+/** Resumen corto de los parámetros: los dos formatos clásicos a mano, el resto desde el catálogo. */
+export function describeParams(operation, params = {}, op = null) {
   if (operation === 'image.convert') {
     const parts = [String(params.format || 'webp').toUpperCase()]
     if (params.lossless) parts.push('sin pérdida')
@@ -76,5 +77,17 @@ export function describeParams(operation, params = {}) {
     const level = { low: 'ligera', medium: 'media', high: 'máxima' }[params.level] || params.level
     return `Compresión ${level}${params.grayscale ? ' · escala de grises' : ''}`
   }
-  return operation
+  if (!op) return operation
+  const props = op.schema?.properties || {}
+  const changed = Object.entries(params)
+    .filter(([k, v]) => v !== '' && v !== null && v !== undefined && v !== false && props[k] && props[k].format !== 'password')
+    .filter(([k, v]) => JSON.stringify(op.defaults?.[k]) !== JSON.stringify(v) || props[k].enum || props[k].anyOf)
+    .slice(0, 3)
+    .map(([k, v]) => {
+      const prop = props[k]
+      const label = prop.labels?.[String(v)]
+      if (v === true) return prop.title
+      return label || `${prop.title?.toLowerCase() || k} ${v}`
+    })
+  return [op.title, ...changed].join(' · ')
 }

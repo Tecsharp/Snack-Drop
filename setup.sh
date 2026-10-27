@@ -4,6 +4,8 @@
 #   ./setup.sh --port 9000          puerto HTTP distinto (por defecto 28743)
 #   ./setup.sh --deepseek-key sk-…  activa el asistente DeepSeek
 #   ./setup.sh --yes                sin preguntas (usa valores por defecto)
+#   ./setup.sh --with-office        el nodo local convierte Word/Excel/PowerPoint a PDF (+~600 MB)
+#   ./setup.sh --with-ai            el nodo local quita fondos, amplía y transcribe (+~1.5 GB)
 #   ./setup.sh --down               detiene los contenedores
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -12,14 +14,20 @@ PORT=""
 DEEPSEEK_KEY=""
 ASSUME_YES=0
 ACTION="up"
+WITH_OFFICE=""
+WITH_AI=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --port) PORT="${2:?Falta el puerto}"; shift 2 ;;
     --deepseek-key) DEEPSEEK_KEY="${2:?Falta la API key}"; shift 2 ;;
     -y|--yes) ASSUME_YES=1; shift ;;
+    --with-office) WITH_OFFICE=true; shift ;;
+    --without-office) WITH_OFFICE=false; shift ;;
+    --with-ai) WITH_AI=true; shift ;;
+    --without-ai) WITH_AI=false; shift ;;
     --down) ACTION="down"; shift ;;
-    -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
     *) echo "Opción desconocida: $1" >&2; exit 1 ;;
   esac
 done
@@ -94,7 +102,7 @@ SNACKDROP_LOCAL_NODE_NAME=master
 # Pon true si sirves Snack-Drop detrás de HTTPS.
 SNACKDROP_COOKIE_SECURE=false
 SNACKDROP_SESSION_TTL_MINUTES=720
-SNACKDROP_MAX_UPLOAD_MB=2048
+SNACKDROP_MAX_UPLOAD_MB=8192
 SNACKDROP_MAX_FILES_PER_JOB=500
 # Días que se conservan los trabajos terminados y sus resultados (0 = para siempre).
 SNACKDROP_RETENTION_DAYS=7
@@ -112,6 +120,11 @@ else
   PORT="$(env_get SNACKDROP_HTTP_PORT)"
   PORT="${PORT:-28743}"
 fi
+
+[[ -n "$WITH_OFFICE" ]] && env_set SNACKDROP_WORKER_OFFICE "$WITH_OFFICE"
+[[ -n "$WITH_AI" ]] && env_set SNACKDROP_WORKER_AI "$WITH_AI"
+[[ "$(env_get SNACKDROP_WORKER_OFFICE)" == "true" ]] && info "Nodo local con LibreOffice (Office → PDF)."
+[[ "$(env_get SNACKDROP_WORKER_AI)" == "true" ]] && info "Nodo local con IA (quitar fondo, ampliar, transcribir)."
 
 info "Construyendo e iniciando contenedores (la primera vez tarda unos minutos)…"
 "${COMPOSE[@]}" up -d --build

@@ -66,7 +66,7 @@ def get_settings() -> Settings:
         deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/"),
         session_ttl_minutes=_int(os.getenv("SNACKDROP_SESSION_TTL_MINUTES"), 720),
         cookie_secure=_bool(os.getenv("SNACKDROP_COOKIE_SECURE"), False),
-        max_upload_mb=_int(os.getenv("SNACKDROP_MAX_UPLOAD_MB"), 2048),
+        max_upload_mb=_int(os.getenv("SNACKDROP_MAX_UPLOAD_MB"), 8192),
         max_files_per_job=_int(os.getenv("SNACKDROP_MAX_FILES_PER_JOB"), 500),
         retention_days=max(0, _int(os.getenv("SNACKDROP_RETENTION_DAYS"), 7)),
         delete_inputs_on_finish=_bool(os.getenv("SNACKDROP_DELETE_INPUTS_ON_FINISH"), True),

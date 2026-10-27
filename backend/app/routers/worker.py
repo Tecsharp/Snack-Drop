@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..catalog import OPERATIONS
+from ..catalog import OPERATIONS, scrub
 from ..deps import get_db, get_node_from_bearer, node_from_token
 from ..models import ACTIVE_STATUSES, TERMINAL_STATUSES, Job, JobFailure, JobFile, JobLog, Node, iso, utcnow
 from ..realtime import NodeConn
@@ -105,6 +105,7 @@ async def complete_job(
             job.error = body.error or "Error desconocido"
             job.message = "Falló"
             node.jobs_failed += 1
+        job.params = scrub(job.operation, job.params)  # no guardar contraseñas más allá del trabajo
         for f in body.failures:
             job.failures.append(JobFailure(filename=safe_filename(f.filename), error=f.error))
         db.add(JobLog(job_id=job.id, line=f"[{node.name}] {job.message if body.ok else 'ERROR: ' + job.error}"))
@@ -188,7 +189,9 @@ async def node_socket(ws: WebSocket):
                 await previous.ws.close(code=4409)
             except Exception:  # noqa: BLE001
                 pass
-        conn = NodeConn(ws=ws, node_id=node.id, capabilities=caps)
+        hw = [e for e in info.get("hw_encoders", []) if isinstance(e, str)][:10] if isinstance(info.get("hw_encoders"), list) else []
+        conn = NodeConn(ws=ws, node_id=node.id, capabilities=caps, hw_encoders=hw,
+                        gpu=bool(hw) or str(info.get("accelerator") or "") == "Nvidia")
         hub.nodes[node.id] = conn
         # Un trabajo que quedó a medias en este nodo vuelve a la cola.
         for job in db.scalars(select(Job).where(Job.assigned_node_id == node.id, Job.status.in_(ACTIVE_STATUSES))):

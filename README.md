@@ -41,6 +41,11 @@ Opciones: `./setup.sh --port 9000`, `./setup.sh --deepseek-key sk-…`, `./setup
    SNACKDROP_SERVER=http://IP-DEL-SERVIDOR:28743 SNACKDROP_TOKEN=sdn_xxx python -m snackdrop_worker
    ```
 
+   Sin Docker, video y audio funcionan gracias al ffmpeg empaquetado; OCR y Office → PDF requieren instalar
+   Tesseract/Ghostscript o LibreOffice en esa computadora.
+
+   Para actualizar un nodo ya configurado basta con `git pull` y `./setup-worker.sh` (reutiliza `worker.env`).
+
 Si la otra computadora no conecta, revisa que el firewall del servidor permita entrada TCP al puerto `28743`
 (o el que elegiste con `--port`) y que ambas estén en la misma red (o usa una VPN como Tailscale).
 
@@ -52,19 +57,40 @@ y solo ejecuta operaciones del catálogo. Su dueño puede limitarlas aún más c
 Cada nodo pertenece a quien lo crea. El dueño autoriza a otros usuarios en **Nodos → Usuarios autorizados** y puede
 pausar, revocar o eliminar el nodo en cualquier momento. Un administrador puede marcar un nodo como disponible para todos.
 
-## Funciones (MVP)
+## Operaciones
 
-| Operación | Detalle |
-|-----------|---------|
-| `image.convert` | JPEG/PNG/WebP/BMP/TIFF/GIF → WebP, JPEG o PNG; calidad, sin pérdida, redimensionado máximo, quitar EXIF/GPS. |
-| `pdf.compress` | Ghostscript (`/printer`, `/ebook`, `/screen`) con opción de escala de grises; respaldo con pikepdf. |
-| Lotes | Cada trabajo acepta cientos de archivos; los resultados se descargan como ZIP. |
+Todas se eligen en **Nuevo trabajo** (o escribiéndolas al asistente). Cada nodo anuncia solo las que puede ejecutar;
+si ninguno conectado puede, el trabajo espera en la cola.
 
-- **Tiempo real (WebSockets)**: disponibilidad de nodos, cola, progreso por etapa (descarga → proceso → subida) y logs en vivo.
-- **Asistente DeepSeek**: escribe «convierte a WebP calidad 75, máx 1920px, en SHRIMPDADDY» y se rellena el trabajo.
-  La respuesta del modelo se valida contra el catálogo; nunca se ejecuta texto libre. Sin API key se usa un intérprete local.
-- **Cola y despacho**: modo automático (primer nodo libre compatible) o nodo específico; pausa por nodo o global;
-  si un nodo se desconecta, su trabajo vuelve a la cola.
+| Categoría | Operaciones |
+|-----------|-------------|
+| **Imágenes** | Convertir (WebP/JPEG/PNG/AVIF) · HEIC de iPhone → JPEG/WebP · AVIF · Marca de agua · Recortar a proporción (encuadre inteligente) · Quitar metadatos EXIF/GPS (JPEG sin recomprimir) · Renombrar por fecha · Quitar fondo (IA) · Ampliar x2/x3/x4 (IA) |
+| **PDF** | Comprimir · Unir · Separar por páginas/rangos · Imágenes → PDF · PDF → imágenes · Rotar · Proteger con contraseña (AES-256) · Quitar contraseña · OCR (español/inglés) · Marca de agua |
+| **Video** | Comprimir H.264/H.265 · Convertir MKV/AVI/MOV → MP4/WebM (sin recodificar si se puede) · Cambiar resolución · Extraer audio · Video → GIF/WebP animado · Miniaturas |
+| **Audio** | Convertir (MP3/AAC/Opus/FLAC/WAV) · Normalizar volumen (EBU R128) · Transcribir a texto/subtítulos (Whisper, IA) |
+| **Documentos y archivos** | Office → PDF · Comprimir en ZIP/7z (7z con contraseña) · Descomprimir ZIP/7z/TAR · Calcular SHA-256/MD5 |
+
+- **Lotes:** cada trabajo acepta cientos de archivos; un archivo dañado se omite y el resto se entrega. Las operaciones
+  de lote (unir, ZIP, renombrar, hash, imágenes → PDF) procesan todos juntos.
+- **GPU:** los nodos con Nvidia (NVENC) o Mac (VideoToolbox) codifican video por hardware, y el despacho les da
+  preferencia para video e IA.
+- **Contraseñas** de PDF/7z: viajan al nodo solo mientras el trabajo corre; la API nunca las muestra y se borran de la
+  base de datos al terminar.
+- **Asistente DeepSeek**: escribe «comprime este video en h265 a 1080p en SHRIMPDADDY» y se rellena el trabajo. La
+  respuesta se valida contra el catálogo; nunca se ejecuta texto libre. Sin API key se usa un intérprete local.
+
+### Extras del nodo
+
+La imagen base del nodo trae ffmpeg, Ghostscript y Tesseract. Dos extras pesados son opcionales:
+
+| Extra | Habilita | Tamaño aprox. | Servidor | Otra computadora |
+|-------|----------|---------------|----------|------------------|
+| Office | Word/Excel/PowerPoint → PDF | +600 MB | `./setup.sh --with-office` | `./setup-worker.sh --with-office` |
+| IA | Quitar fondo, ampliar, transcribir | +1.5 GB | `./setup.sh --with-ai` | `./setup-worker.sh --with-ai` |
+
+Los modelos de IA se descargan al construir la imagen (con hash verificado), así el nodo funciona sin internet.
+Dentro de Docker la IA corre en CPU; para usar la GPU Nvidia con IA ejecuta el nodo sin Docker
+(`pip install -r requirements.txt -r requirements-ai.txt`).
 
 ## Archivos y limpieza
 
