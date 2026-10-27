@@ -6,6 +6,7 @@ Los parámetros se vuelven a validar aquí aunque el servidor ya lo haya hecho.
 
 from __future__ import annotations
 
+import io
 import shutil
 import subprocess
 from pathlib import Path
@@ -40,6 +41,27 @@ def _clamp_int(value, lo: int, hi: int, default: int | None) -> int | None:
         return default
 
 
+# Formatos donde «varios cuadros» significa animación. Los JPEG MPO de iPhone/Android
+# traen imágenes secundarias (profundidad, HDR) de otro tamaño: se usa solo la principal.
+ANIMATED_SOURCES = {"GIF", "WEBP", "PNG"}
+FALLBACK_QUALITIES = (85, 80, 75, 70, 65, 60)
+
+
+def _encode(im: Image.Image, fmt: str, quality: int, lossless: bool, animated: bool, extra: dict) -> bytes:
+    kwargs = dict(extra)
+    if fmt == "webp":
+        kwargs.update(quality=quality, lossless=lossless, method=4)
+        if animated:
+            kwargs["save_all"] = True
+    elif fmt == "jpeg":
+        kwargs.update(quality=quality, optimize=True, progressive=True)
+    else:
+        kwargs.update(optimize=True)
+    buf = io.BytesIO()
+    im.save(buf, format=fmt.upper(), **kwargs)
+    return buf.getvalue()
+
+
 def convert_image(src: Path, out_dir: Path, original_name: str, params: dict) -> tuple[Path, str]:
     fmt = params.get("format", "webp")
     if fmt not in IMAGE_FORMATS:
@@ -49,12 +71,20 @@ def convert_image(src: Path, out_dir: Path, original_name: str, params: dict) ->
     max_h = _clamp_int(params.get("max_height"), 16, 16384, None)
     lossless = bool(params.get("lossless")) and fmt == "webp"
     strip = params.get("strip_metadata", True) is not False
+    never_larger = params.get("never_larger", True) is not False
 
+    before = src.stat().st_size
     out = _unique(out_dir, Path(original_name).stem or "imagen", IMAGE_FORMATS[fmt])
+    note = ""
     try:
         with Image.open(src) as im:
+            source_format = im.format or ""
+            animated = (
+                fmt == "webp" and source_format in ANIMATED_SOURCES and bool(getattr(im, "is_animated", False))
+            )
+            if not animated:
+                im.seek(0)
             im.load()
-            animated = bool(getattr(im, "is_animated", False)) and fmt == "webp"
             exif = im.info.get("exif")
             icc = im.info.get("icc_profile")
             orig_size = im.size
@@ -73,28 +103,39 @@ def convert_image(src: Path, out_dir: Path, original_name: str, params: dict) ->
             elif not animated and im.mode not in ("RGB", "RGBA", "L", "LA") + (("P",) if fmt == "png" else ()):
                 im = im.convert("RGBA" if "A" in im.getbands() or im.mode == "P" else "RGB")
 
-            kwargs: dict = {}
+            extra: dict = {}
             if icc:
-                kwargs["icc_profile"] = icc
+                extra["icc_profile"] = icc
             if exif and not strip:
-                kwargs["exif"] = exif
-            if fmt == "webp":
-                kwargs.update(quality=quality, lossless=lossless, method=4)
-                if animated:
-                    kwargs["save_all"] = True
-            elif fmt == "jpeg":
-                kwargs.update(quality=quality, optimize=True, progressive=True)
-            else:
-                kwargs.update(optimize=True)
-            im.save(out, format=fmt.upper(), **kwargs)
+                extra["exif"] = exif
+            data = _encode(im, fmt, quality, lossless, animated, extra)
             new_size = im.size
-    except (OSError, ValueError, Image.DecompressionBombError) as exc:
+
+            # Re-codificar un JPEG ya comprimido con calidad muy alta suele crecer el archivo.
+            if never_larger and len(data) >= before and fmt in ("webp", "jpeg") and not lossless:
+                for q in (q for q in FALLBACK_QUALITIES if q < quality):
+                    data = _encode(im, fmt, q, lossless, animated, extra)
+                    if len(data) < before:
+                        note = f", calidad ajustada {quality}→{q} para no crecer"
+                        break
+        src_ext = Path(original_name).suffix.lower()
+        same_format = src_ext in ({".jpg", ".jpeg"} if fmt == "jpeg" else {IMAGE_FORMATS[fmt]})
+        if never_larger and len(data) >= before and same_format and new_size == orig_size and not (strip and exif):
+            shutil.copyfile(src, out)
+            note = ", ya estaba optimizada: se conserva el original"
+        else:
+            if never_larger and len(data) >= before:
+                note = ", no se pudo reducir más"
+            out.write_bytes(data)
+    except ProcessingError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - Pillow lanza OSError, ValueError, RuntimeError…
         out.unlink(missing_ok=True)
         raise ProcessingError(f"No se pudo procesar la imagen {original_name}: {exc}") from exc
 
-    before, after = src.stat().st_size, out.stat().st_size
+    after = out.stat().st_size
     dims = f"{orig_size[0]}x{orig_size[1]}" + (f" → {new_size[0]}x{new_size[1]}" if new_size != orig_size else "")
-    return out, f"{original_name} → {out.name} ({dims}, {_fmt(before)} → {_fmt(after)})"
+    return out, f"{original_name} → {out.name} ({dims}, {_fmt(before)} → {_fmt(after)}{note})"
 
 
 def _ghostscript() -> str | None:

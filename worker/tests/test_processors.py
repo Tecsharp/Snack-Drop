@@ -89,3 +89,49 @@ def test_config_and_sysinfo(monkeypatch):
     assert cfg.allowed_operations == ["image.convert"]
     info = system_info("host")
     assert info["hostname"] == "host" and info["os"]
+
+
+def _camera_jpeg(path: Path, size=(1600, 1200), quality=82) -> Path:
+    """JPEG con ruido, parecido a una foto de celular ya comprimida."""
+    import os
+
+    noise = Image.frombytes("L", size, os.urandom(size[0] * size[1])).convert("RGB")
+    noise.save(path, quality=quality)
+    return path
+
+
+def test_iphone_mpo_uses_main_image(tmp_path):
+    # Los JPEG de iPhone son MPO: foto principal + mapa secundario de otro tamaño.
+    src = tmp_path / "IMG_1144.jpg"
+    main = Image.new("RGB", (1200, 900), (200, 50, 50))
+    depth = Image.new("RGB", (300, 200), (10, 10, 10))
+    main.save(src, format="MPO", save_all=True, append_images=[depth])
+    with Image.open(src) as im:
+        assert im.format == "MPO" and im.is_animated
+    out, _ = process("image.convert", {"format": "webp"}, src, tmp_path / "out", "IMG_1144.jpg")
+    with Image.open(out) as im:
+        assert im.format == "WEBP" and im.size == (1200, 900)
+        assert not getattr(im, "is_animated", False)
+
+
+def test_quality_100_never_larger(tmp_path):
+    src = _camera_jpeg(tmp_path / "foto.jpg")
+    out, info = process("image.convert", {"format": "webp", "quality": 100}, src, tmp_path / "out", "foto.jpg")
+    assert out.stat().st_size < src.stat().st_size, info
+    assert "calidad ajustada" in info
+
+
+def test_same_format_keeps_original_when_cannot_shrink(tmp_path):
+    src = _camera_jpeg(tmp_path / "foto.jpg", quality=30)
+    out, info = process(
+        "image.convert", {"format": "jpeg", "quality": 100, "strip_metadata": False}, src, tmp_path / "out", "foto.jpg"
+    )
+    assert out.stat().st_size <= src.stat().st_size, info
+
+
+def test_never_larger_can_be_disabled(tmp_path):
+    src = _camera_jpeg(tmp_path / "foto.jpg")
+    out, _ = process(
+        "image.convert", {"format": "webp", "quality": 100, "never_larger": False}, src, tmp_path / "out", "foto.jpg"
+    )
+    assert out.stat().st_size > src.stat().st_size

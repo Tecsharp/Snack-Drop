@@ -231,12 +231,21 @@ class Agent:
                     await self.progress(job_id, "downloading", 20 * min(1, done_bytes / total_bytes), f"Descargando {i + 1}/{total}")
 
                 outputs: list[Path] = []
+                errors: list[str] = []
                 for i, (src, name) in enumerate(local):
                     self._check_cancel()
                     await self.progress(job_id, "processing", 20 + 70 * i / total, f"Procesando {i + 1}/{total}: {name}")
-                    out, info = await asyncio.to_thread(process, operation, params, src, out_dir, name)
+                    try:
+                        out, info = await asyncio.to_thread(process, operation, params, src, out_dir, name)
+                    except ProcessingError as exc:
+                        # Un archivo dañado no debe tumbar el lote completo.
+                        errors.append(str(exc))
+                        await self.log_line(job_id, f"OMITIDO: {exc}")
+                        continue
                     outputs.append(out)
                     await self.log_line(job_id, info)
+                if not outputs:
+                    raise ProcessingError(errors[0] if len(errors) == 1 else f"Ningún archivo se pudo procesar ({len(errors)} errores)")
                 await self.progress(job_id, "processing", 90, "Procesamiento terminado")
 
                 for i, out in enumerate(outputs):
@@ -249,6 +258,8 @@ class Agent:
                 before = sum(int(f.get("size") or 0) for f in inputs)
                 after = sum(p.stat().st_size for p in outputs)
                 summary = f"{len(outputs)} archivo(s) listos"
+                if errors:
+                    summary += f" · {len(errors)} omitido(s)"
                 if before:
                     summary += f" · {after * 100 / before:.0f}% del tamaño original"
                 await client.post(f"{base}/complete", json={"ok": True, "summary": summary})
@@ -258,7 +269,6 @@ class Agent:
             except Exception as exc:  # noqa: BLE001 - se reporta al servidor
                 message = str(exc) if isinstance(exc, ProcessingError) else f"{type(exc).__name__}: {exc}"
                 log.exception("Trabajo %s falló", job_id)
-                await self.log_line(job_id, f"ERROR: {message}")
                 await _safe_post(client, f"{base}/complete", {"ok": False, "error": message[:4000]})
             finally:
                 shutil.rmtree(work, ignore_errors=True)

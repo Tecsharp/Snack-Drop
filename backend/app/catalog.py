@@ -24,6 +24,7 @@ class ImageConvertParams(BaseModel):
     max_height: int | None = Field(None, ge=16, le=16384, description="Alto máximo en px")
     lossless: bool = Field(False, description="Sin pérdida (solo WebP)")
     strip_metadata: bool = Field(True, description="Eliminar metadatos EXIF")
+    never_larger: bool = Field(True, description="No entregar archivos más grandes que el original")
 
 
 class PdfCompressParams(BaseModel):

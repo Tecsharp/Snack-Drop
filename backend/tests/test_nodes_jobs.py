@@ -211,8 +211,25 @@ def test_end_to_end_webp_batch(live_server, tmp_path):
             job = _wait_job(http, r.json()["id"])
             assert job["status"] == "failed" and "rota.png" in job["error"]
 
+            # Lote mixto: el archivo dañado se omite y el resto se entrega.
+            r = http.post(
+                "/api/jobs",
+                data={"operation": "image.convert"},
+                files=[
+                    ("files", ("buena1.png", png_bytes(), "image/png")),
+                    ("files", ("rota.png", b"basura", "image/png")),
+                    ("files", ("buena2.png", png_bytes(), "image/png")),
+                ],
+            )
+            job = _wait_job(http, r.json()["id"])
+            assert job["status"] == "done", job
+            assert sorted(o["filename"] for o in job["outputs"]) == ["buena1.webp", "buena2.webp"]
+            assert "1 omitido" in job["message"]
+            logs = http.get(f"/api/jobs/{job['id']}/logs").json()
+            assert any("OMITIDO" in l["line"] and "rota.png" in l["line"] for l in logs)
+
             nodes = http.get("/api/nodes").json()
-            assert nodes[0]["jobs_done"] == 2 and nodes[0]["jobs_failed"] == 1
+            assert nodes[0]["jobs_done"] == 3 and nodes[0]["jobs_failed"] == 1
     finally:
         stop.set()
         thread.join(timeout=15)

@@ -56,6 +56,16 @@ function ImageParams({ params, set }) {
         <input type="checkbox" checked={params.strip_metadata} onChange={(e) => set({ strip_metadata: e.target.checked })} />{' '}
         Quitar metadatos (EXIF/GPS)
       </label>
+      <label className="check">
+        <input type="checkbox" checked={params.never_larger} onChange={(e) => set({ never_larger: e.target.checked })} /> Nunca
+        más grande que el original
+      </label>
+      {params.format !== 'png' && !params.lossless && params.quality > 90 && (
+        <div className="alert warn small" style={{ gridColumn: '1 / -1' }}>
+          Calidad mayor a 90 casi siempre produce archivos más pesados que un JPEG de cámara. Para fotos, 75–85 se ve igual y pesa
+          mucho menos.
+        </div>
+      )}
     </div>
   )
 }
