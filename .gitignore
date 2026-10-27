@@ -1,0 +1,17 @@
+# Secretos generados por setup.sh / setup-worker.sh
+.env
+worker.env
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Datos locales
+data/
+.DS_Store
